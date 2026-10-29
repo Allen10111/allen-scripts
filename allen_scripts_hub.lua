@@ -14022,7 +14022,7 @@ end
 state.HubOnly=true
 env.__FF_AUTOPLAY=state
 state:SetEnabled(false)
-print("[FF Autoplay] Loaded OFF. Blank button / F6 toggles.")
+print("[FF Autoplay] Loaded OFF. Controlled by the Allen Scripts hub switch.")
 
 
 ]====]);assert(fn,err);fn()
@@ -14043,16 +14043,22 @@ local function sync()
     folder:SetAttribute("Status",q.Status or "Off")
     folder:SetAttribute("Errors",q.Errors or 0)
 end
-bridge.Connection=LP.PlayerScripts.ClientActor:BindToMessage("AllenHubFFControl",function(enabled)
-    if bridge.Destroyed then return end
-    local success,message=pcall(controller.SetEnabled,controller,enabled==true)
-    if not success then folder:SetAttribute("Error",tostring(message)) end
-    sync()
-end)
+-- Read the hub's desired state across Actor contexts without script ancestry requirements.
+local lastRequested=false
+local function applyRequested()
+    local desired=folder:GetAttribute("DesiredEnabled")==true
+    if desired~=lastRequested then
+        lastRequested=desired
+        local success,message=pcall(controller.SetEnabled,controller,desired)
+        if not success then
+            folder:SetAttribute("DesiredEnabled",false)
+            folder:SetAttribute("Error",tostring(message))
+        end
+    end
+end
 function bridge:Destroy()
     if self.Destroyed then return end
     self.Destroyed=true
-    self.Connection:Disconnect()
     if controller and not controller.Destroyed then controller:Destroy() end
     if env.__ALLEN_FF_BRIDGE==self then env.__ALLEN_FF_BRIDGE=nil end
 end
@@ -14060,7 +14066,7 @@ env.__ALLEN_FF_BRIDGE=bridge
 sync();folder:SetAttribute("Ready",true)
 task.spawn(function()
     while not bridge.Destroyed and folder.Parent and not controller.Destroyed do
-        sync();task.wait(.25)
+        applyRequested();sync();task.wait(.05)
     end
     bridge:Destroy()
 end)
@@ -14088,12 +14094,16 @@ local function localController(id,key)
     if current and not current.Destroyed and current.HubOnly and type(current.SetEnabled)=="function" then hub.Controllers[id]=current;return current end
 end
 local function prepareFF()
-    if ffFolder and ffFolder.Parent then return end
+    if ffFolder and ffFolder.Parent then
+        if not ffFolder:GetAttribute("Error") then return end
+        ffFolder:Destroy();ffFolder=nil
+    end
     assert(type(run_on_actor)=="function","This executor does not support Actor execution")
     ffActor=LP:WaitForChild("PlayerScripts"):FindFirstChild("ClientActor")
     assert(ffActor,"Funky Friday client is not ready")
     ffFolder=Instance.new("Folder");ffFolder.Name="AllenHubFFStatus";ffFolder.Parent=LP:WaitForChild("PlayerGui")
     ffFolder:SetAttribute("Ready",false)
+    ffFolder:SetAttribute("DesiredEnabled",false)
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
@@ -14128,10 +14138,10 @@ local function change(feature)
             if feature.Id=="ff" then
                 prepareFF()
                 local deadline=os.clock()+12
-                while not hub.Destroyed and ffFolder.Parent and not ffFolder:GetAttribute("Ready") and os.clock()<deadline do task.wait(.1) end
+                while not hub.Destroyed and ffFolder.Parent and not ffFolder:GetAttribute("Ready") and not ffFolder:GetAttribute("Error") and os.clock()<deadline do task.wait(.1) end
                 if hub.Destroyed then return end
                 assert(ffFolder:GetAttribute("Ready"),ffFolder:GetAttribute("Error") or "Autoplay engine did not initialize")
-                ffActor:SendMessage("AllenHubFFControl",not ffFolder:GetAttribute("Enabled"))
+                ffFolder:SetAttribute("DesiredEnabled",not ffFolder:GetAttribute("DesiredEnabled"))
             else
                 local current=localController(feature.Id,feature.Key)
                 if not current then
