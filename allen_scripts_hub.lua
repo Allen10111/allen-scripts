@@ -14073,7 +14073,7 @@ if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
 local hub={Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU=7008097940,2404080894,3405992067
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or "Other experience"
-local note="Select a section. All features start OFF."
+local note="Browse the library. All features start OFF."
 local ffFolder,ffActor
 local function execute(name)
     local fn,err=loadstring(SOURCES[name]);assert(fn,err);fn()
@@ -14092,11 +14092,10 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="camera",Section="Universal",Name="Soft Camera Lock",Subtitle="Torso tracking · red highlight",Badge="Universal",Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
-    {Id="dodge",Section="Ink Game",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
-    {Id="parry",Section="Ink Game",Name="Auto Parry",Subtitle="Settings discussed · no standalone script",Unavailable=true},
-    {Id="ff",Section="Funky Friday",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
-    {Id="rosu",Section="rosu!mania",Name="Auto Play",Subtitle="Native taps, holds and releases · local charts",Badge="rosu!mania",Game=ROSU,Key="__ROSU_AUTOPLAY",Source="Rosu"},
+    {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="Torso tracking · red highlight",Badge="Universal",Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
+    {Id="dodge",Section="Ink Game",Category="Movement",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
+    {Id="ff",Section="Funky Friday",Category="Rhythm",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
+    {Id="rosu",Section="rosu!mania",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and releases · local charts",Badge="rosu!mania",Game=ROSU,Key="__ROSU_AUTOPLAY",Source="Rosu"},
 }
 local function snapshot(feature)
     if feature.Unavailable then return {Enabled=false,Status="Unavailable"} end
@@ -14142,8 +14141,8 @@ local function change(feature)
         hub.Busy[feature.Id]=nil
     end)
 end
-local C={BG=Color3.fromRGB(14,15,22),Card=Color3.fromRGB(24,26,37),Line=Color3.fromRGB(42,44,62),
-    Text=Color3.fromRGB(239,240,249),Muted=Color3.fromRGB(146,151,174),Accent=Color3.fromRGB(143,113,255),Green=Color3.fromRGB(78,218,161)}
+local C={BG=Color3.fromRGB(6,6,7),Card=Color3.fromRGB(17,17,19),Line=Color3.fromRGB(43,43,47),
+    Text=Color3.fromRGB(242,242,245),Muted=Color3.fromRGB(143,143,151),Accent=Color3.fromRGB(225,225,230),Green=Color3.fromRGB(113,207,157)}
 local function create(class,props,parent)
     local object=Instance.new(class);for k,v in pairs(props)do object[k]=v end;object.Parent=parent;return object
 end
@@ -14153,7 +14152,7 @@ local mounted=false
 if type(gethui)=="function" then mounted=pcall(function()local parent=gethui();assert(parent);gui.Parent=parent end)end
 if not mounted then gui.Parent=LP:WaitForChild("PlayerGui")end
 hub.Gui=gui
-local window=rounded(create("Frame",{Name="Window",Size=UDim2.fromOffset(490,435),Position=UDim2.new(.5,-245,.5,-217),
+local window=rounded(create("Frame",{Name="Window",Size=UDim2.fromOffset(720,570),Position=UDim2.new(.5,-360,.5,-285),
     BackgroundColor3=C.BG,BorderSizePixel=0},gui),18)
 create("UIStroke",{Color=C.Line,Thickness=1},window)
 local scale=create("UIScale",{Scale=1},window)
@@ -14165,29 +14164,63 @@ local function button(parent,content,x,y,w,h)
     return rounded(create("TextButton",{Text=content,TextSize=12,Font=Enum.Font.GothamBold,TextColor3=C.Text,
         BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h)},parent),9)
 end
-local header=create("Frame",{Name="DragHandle",Size=UDim2.fromOffset(375,73),BackgroundTransparency=1,Active=true},window)
+local header=create("Frame",{Name="DragHandle",Size=UDim2.fromOffset(600,78),BackgroundTransparency=1,Active=true},window)
 header.ZIndex=5
-local badge=rounded(create("Frame",{BackgroundColor3=C.Accent,BorderSizePixel=0,Position=UDim2.fromOffset(20,20),Size=UDim2.fromOffset(38,38)},window),12)
+local badge=rounded(create("Frame",{BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.fromOffset(20,20),Size=UDim2.fromOffset(38,38)},window),12)
+create("UIStroke",{Color=C.Line,Thickness=1},badge)
 local initials=text(badge,"AS",0,0,38,38,14);initials.TextXAlignment=Enum.TextXAlignment.Center;initials.Font=Enum.Font.GothamBold
 local title=text(window,"Allen Scripts",70,17,280,27,21);title.Font=Enum.Font.GothamBold
-text(window,gameName.."  /  script hub",71,44,300,18,11,C.Muted)
-local hide=button(window,"—",400,24,28,28)
-local close=button(window,"×",438,24,28,28)
+text(window,"SCRIPT LIBRARY  /  "..gameName,71,44,310,18,10,C.Muted)
+local hide=button(window,"—",630,24,28,28)
+local close=button(window,"×",668,24,28,28)
 local launcher=rounded(create("TextButton",{Name="OpenHub",Text="AS",Font=Enum.Font.GothamBold,TextSize=15,
-    TextColor3=C.Text,BackgroundColor3=C.Accent,BorderSizePixel=0,Position=UDim2.new(0,18,.5,-24),Size=UDim2.fromOffset(48,48)},gui),14)
-create("Frame",{BackgroundColor3=C.Line,BorderSizePixel=0,Position=UDim2.fromOffset(20,79),Size=UDim2.fromOffset(450,1)},window)
-local tabs={}
-local selected=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or "Universal"
-local scroll=create("ScrollingFrame",{Name="Features",Position=UDim2.fromOffset(20,136),Size=UDim2.fromOffset(450,242),
+    TextColor3=C.Text,BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.new(0,18,.5,-24),Size=UDim2.fromOffset(48,48)},gui),14)
+create("UIStroke",{Color=C.Line,Thickness=1},launcher)
+create("Frame",{BackgroundColor3=C.Line,BorderSizePixel=0,Position=UDim2.fromOffset(20,79),Size=UDim2.fromOffset(680,1)},window)
+local sidebar=rounded(create("Frame",{Name="Categories",BackgroundColor3=Color3.fromRGB(11,11,13),BorderSizePixel=0,
+    Position=UDim2.fromOffset(20,98),Size=UDim2.fromOffset(154,452)},window),12)
+text(window,"GAMES",34,114,120,18,10,C.Muted)
+text(window,"4 scripts available",34,514,126,18,10,C.Muted)
+local categoryButtons,sectionButtons={},{}
+local selectedGame,selectedSection="All","All"
+local search=rounded(create("TextBox",{Name="Search",PlaceholderText="Search games or scripts…",Text="",ClearTextOnFocus=false,
+    TextColor3=C.Text,PlaceholderColor3=C.Muted,TextSize=13,Font=Enum.Font.Gotham,TextXAlignment=Enum.TextXAlignment.Left,
+    BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.fromOffset(194,98),Size=UDim2.fromOffset(506,42)},window),10)
+create("UIStroke",{Color=C.Line,Thickness=1},search)
+create("UIPadding",{PaddingLeft=UDim.new(0,14),PaddingRight=UDim.new(0,43)},search)
+local clearSearch=button(window,"×",665,106,27,26)
+local currentGame=button(window,"This game only",30,382,134,32)
+local currentOnly=false
+local results=text(window,"",196,193,498,17,10,C.Muted)
+local scroll=create("ScrollingFrame",{Name="Features",Position=UDim2.fromOffset(194,221),Size=UDim2.fromOffset(506,282),
     BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=C.Accent,
     CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y},window)
 create("UIListLayout",{Padding=UDim.new(0,10),SortOrder=Enum.SortOrder.LayoutOrder},scroll)
-local footer=text(window,"",22,389,445,32,11,C.Muted);footer.TextWrapped=true;footer.TextYAlignment=Enum.TextYAlignment.Top
+local empty=text(window,"No scripts found\nTry Ink Game, Funky Friday, rosu or Universal.",214,299,466,70,13,C.Muted)
+empty.TextXAlignment=Enum.TextXAlignment.Center;empty.TextWrapped=true
+local footer=text(window,"",196,520,498,32,10,C.Muted);footer.TextWrapped=true;footer.TextYAlignment=Enum.TextYAlignment.Top
 local function connect(signal,callback)hub.Connections[#hub.Connections+1]=signal:Connect(callback)end
+local function matches(feature,query,onlyCurrent,universe)
+    if onlyCurrent and feature.Game and feature.Game~=universe then return false end
+    local hay=(feature.Section.." "..feature.Name.." "..feature.Subtitle.." "..(feature.Category or "")):lower():gsub("[^%w]","")
+    for term in query:lower():gmatch("%w+")do
+        if not hay:find(term,1,true) then return false end
+    end
+    return true
+end
+local sectionHeaders={}
 local function render()
-    for section,tab in pairs(tabs)do tab.BackgroundColor3=section==selected and C.Accent or C.Card end
+    for name,item in pairs(categoryButtons)do item.BackgroundColor3=selectedGame==name and C.Line or C.Card end
+    for name,item in pairs(sectionButtons)do item.BackgroundColor3=selectedSection==name and C.Line or C.Card end
+    currentGame.BackgroundColor3=currentOnly and C.Line or C.Card
+    clearSearch.Visible=search.Text~=""
+    local visible,sections=0,{}
+    for _,item in pairs(sectionHeaders)do item.Visible=false end
     for _,row in ipairs(hub.Rows)do
-        row.Card.Visible=row.Feature.Section==selected
+        row.Card.Visible=matches(row.Feature,search.Text,currentOnly,game.GameId)
+            and (selectedGame=="All" or selectedGame==row.Feature.Section)
+            and (selectedSection=="All" or selectedSection==row.Feature.Category)
+        if row.Card.Visible then visible+=1;sections[row.Feature.Section]=true;sectionHeaders[row.Feature.Category].Visible=true end
         local q=snapshot(row.Feature)
         local busy=hub.Busy[row.Feature.Id]
         local unavailable=row.Feature.Unavailable or row.Feature.Game and row.Feature.Game~=game.GameId
@@ -14195,26 +14228,45 @@ local function render()
         row.Toggle.BackgroundColor3=q.Enabled and C.Accent or C.Line
         row.Label.TextColor3=unavailable and C.Muted or C.Text
         row.Knob.Position=UDim2.fromOffset(q.Enabled and 38 or 4,4)
-        row.Knob.BackgroundColor3=unavailable and C.Muted or C.Text
+        row.Knob.BackgroundColor3=unavailable and C.Muted or q.Enabled and C.BG or C.Text
         row.Toggle.Active=not unavailable and not busy
         row.State.Text=busy and "Loading…" or (q.Status or "Off")..(q.Hits and "  ·  "..q.Hits.." hits" or "")
         row.State.TextColor3=q.Enabled and C.Green or C.Muted
     end
+    local count=0;for _ in pairs(sections)do count+=1 end
+    results.Text=tostring(visible)..(visible==1 and " script" or " scripts").."  ·  "..tostring(count)..(count==1 and " game / category" or " games / categories")
+    empty.Visible=visible==0
     footer.Text=note.."\nRight Shift: hide / show  ·  AS: reopen"
 end
-for index,section in ipairs({"Universal","Ink Game","Funky Friday","rosu!mania"})do
-    local tab=button(window,section,20+(index-1)*114,95,108,30);tabs[section]=tab
-    connect(tab.Activated,function()selected=section;scroll.CanvasPosition=Vector2.zero;render()end)
+connect(search:GetPropertyChangedSignal("Text"),function()scroll.CanvasPosition=Vector2.zero;render()end)
+connect(clearSearch.Activated,function()search.Text="";search:ReleaseFocus()end)
+connect(currentGame.Activated,function()currentOnly=not currentOnly;scroll.CanvasPosition=Vector2.zero;render()end)
+for index,name in ipairs({"All","Universal","Ink Game","Funky Friday","rosu!mania"})do
+    local item=button(window,name=="All" and "All scripts" or name,30,145+(index-1)*43,134,34)
+    categoryButtons[name]=item
+    connect(item.Activated,function()selectedGame=name;currentOnly=false;scroll.CanvasPosition=Vector2.zero;render()end)
+end
+local categoryOrder={Aim=1,Movement=2,Rhythm=3}
+for index,name in ipairs({"All","Aim","Movement","Rhythm"})do
+    local item=button(window,name=="All" and "All sections" or name,194+(index-1)*128,153,122,28)
+    sectionButtons[name]=item
+    connect(item.Activated,function()selectedSection=name;scroll.CanvasPosition=Vector2.zero;render()end)
+end
+for name,index in pairs(categoryOrder)do
+    sectionHeaders[name]=text(scroll,name:upper(),0,0,490,22,10,C.Muted)
+    sectionHeaders[name].Size=UDim2.new(1,-7,0,22);sectionHeaders[name].LayoutOrder=index*100
 end
 for index,feature in ipairs(features)do
-    local card=rounded(create("Frame",{Name=feature.Id,Size=UDim2.new(1,-7,0,100),BackgroundColor3=C.Card,
-        BorderSizePixel=0,LayoutOrder=index},scroll),12)
-    local name=text(card,feature.Name,15,10,305,24,16);name.Font=Enum.Font.GothamBold
-    text(card,feature.Subtitle,15,36,306,28,10,C.Muted).TextWrapped=true
-    local status=text(card,"Not loaded",15,73,360,16,10,C.Muted)
-    local caption=text(card,"OFF",360,13,64,17,10,C.Muted);caption.TextXAlignment=Enum.TextXAlignment.Center
+    local card=rounded(create("Frame",{Name=feature.Id,Size=UDim2.new(1,-7,0,116),BackgroundColor3=C.Card,
+        BorderSizePixel=0,LayoutOrder=categoryOrder[feature.Category]*100+index},scroll),12)
+    create("UIStroke",{Color=Color3.fromRGB(30,30,33),Thickness=1},card)
+    text(card,feature.Section:upper(),15,9,300,16,10,C.Accent)
+    local name=text(card,feature.Name,15,29,360,24,16);name.Font=Enum.Font.GothamBold
+    text(card,feature.Subtitle,15,55,354,26,10,C.Muted).TextWrapped=true
+    local status=text(card,"Not loaded",15,89,460,16,10,C.Muted)
+    local caption=text(card,"OFF",414,24,64,17,10,C.Muted);caption.TextXAlignment=Enum.TextXAlignment.Center
     local toggle=rounded(create("TextButton",{Name="Switch",Text="",AutoButtonColor=false,
-        Position=UDim2.fromOffset(360,38),Size=UDim2.fromOffset(64,30),BorderSizePixel=0,BackgroundColor3=C.Line},card),15)
+        Position=UDim2.fromOffset(414,49),Size=UDim2.fromOffset(64,30),BorderSizePixel=0,BackgroundColor3=C.Line},card),15)
     local knob=rounded(create("Frame",{Name="Thumb",Size=UDim2.fromOffset(22,22),Position=UDim2.fromOffset(4,4),
         BackgroundColor3=C.Text,BorderSizePixel=0},toggle),11)
     hub.Rows[#hub.Rows+1]={Feature=feature,Card=card,Toggle=toggle,Label=caption,Knob=knob,State=status}
@@ -14224,14 +14276,14 @@ local panelPosition
 local function positionPanel(position)
     local camera=workspace.CurrentCamera;if not camera then return end
     local size=camera.ViewportSize
-    panelPosition=Vector2.new(math.clamp(position.X,8,math.max(8,size.X-490*scale.Scale-8)),
-        math.clamp(position.Y,48,math.max(48,size.Y-435*scale.Scale-8)))
+    panelPosition=Vector2.new(math.clamp(position.X,8,math.max(8,size.X-720*scale.Scale-8)),
+        math.clamp(position.Y,48,math.max(48,size.Y-570*scale.Scale-8)))
     window.Position=UDim2.fromOffset(panelPosition.X,panelPosition.Y)
 end
 local function fit()
     local camera=workspace.CurrentCamera;if not camera then return end
     local size=camera.ViewportSize
-    scale.Scale=math.min(1,math.max(.3,(size.X-24)/490),math.max(.3,(size.Y-90)/435))
+    scale.Scale=math.min(1,math.max(.3,(size.X-24)/720),math.max(.3,(size.Y-90)/570))
     positionPanel(panelPosition or window.AbsolutePosition)
 end
 local drag
@@ -14283,6 +14335,10 @@ if game.GameId==FF and type(run_on_actor)=="function" then
 end
 env.__ALLEN_GENERAL_HUB=hub
 hub.Features=features
+hub.Search=search
+hub.Matches=matches
+hub.CategoryButtons=categoryButtons
+hub.SectionButtons=sectionButtons
 hub.GetFeatureSnapshot=function(_,id)for _,feature in ipairs(features)do if feature.Id==id then return snapshot(feature)end end end
 task.defer(fit)
 render()
