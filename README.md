@@ -27,8 +27,8 @@ The hub and bundled engines are readable, not obfuscated. Executor support is re
 
 ## Mobile
 
-The GUI adapts to touch screens with portrait and landscape layouts, a scrollable Games menu, swipeable section tabs, 44-pixel switches, and a touch drag handle. Safe-area and on-screen-keyboard changes are handled automatically. Tap AS to reopen the window. The executor must still support the APIs required by each game, including Actor execution for Funky Friday.
+The compact mobile window is capped at 430 by 430 pixels and adapts to touch screens with portrait and landscape layouts, a scrollable Games menu, swipeable section tabs, 44-pixel switches, and a touch drag handle. Safe-area and on-screen-keyboard changes are handled automatically. Tap AS to reopen the window. The executor must still support the APIs required by each game, including Actor execution for Funky Friday.
 
-## Standalone Auto Dodge
+## Auto Dodge engine
 
-`ink_auto_dodge.lua` is the same native dodge engine for PC and mobile. Tap the blank button on touch devices; PC users can click it or press F1. It starts OFF. The hub uses its own switch instead. Requires a supported executor and an available native dash.
+`ink_auto_dodge.lua` is the button-free native dodge engine for PC and mobile. It starts OFF and is controlled by the hub switch. It creates no standalone GUI or hotkeys. Requires a supported executor and an available native dash.

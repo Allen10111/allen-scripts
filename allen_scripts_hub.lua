@@ -14305,7 +14305,7 @@ local panelWidth,panelHeight=720,570
 local availableSize
 local function layoutMetrics(width,height,touch)
     local small=touch or width<760 or height<640
-    if small then return {Compact=true,Width=math.min(620,width-16),Height=math.min(680,height-16)} end
+    if small then return {Compact=true,Width=math.min(430,width-24),Height=math.min(430,height-32,math.floor(height*.82))} end
     return {Compact=false,Width=720,Height=570}
 end
 local function place(object,x,y,w,h)

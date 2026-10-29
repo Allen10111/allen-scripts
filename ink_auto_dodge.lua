@@ -1079,32 +1079,8 @@ local function nativeDashAvailable(character, humanoid)
     return ready, reason, remaining, 0, 0, source
 end
 
-local StatusGui = Instance.new("ScreenGui")
-StatusGui.Name = "InkAnimationAutoDodge"
-StatusGui.ResetOnSpawn = false
-StatusGui.IgnoreGuiInset = false
-pcall(function() StatusGui.ScreenInsets = Enum.ScreenInsets.CoreUISafeInsets end)
-StatusGui.DisplayOrder = 1000000
-StatusGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-local ToggleButton = Instance.new("TextButton")
-ToggleButton.Name = "Toggle"
-ToggleButton.AnchorPoint = Vector2.new(0.5, 0)
-ToggleButton.Position = UDim2.fromScale(0.5, 0.025)
-ToggleButton.Size = UDim2.fromOffset(56, 56)
-ToggleButton.BackgroundColor3 = Color3.fromRGB(164, 55, 62)
-ToggleButton.Active = true
-ToggleButton.BorderSizePixel = 0
-ToggleButton.AutoButtonColor = true
-ToggleButton.Text = ""
-ToggleButton.Parent = StatusGui
-
-local ToggleCorner = Instance.new("UICorner")
-ToggleCorner.CornerRadius = UDim.new(0, 12)
-ToggleCorner.Parent = ToggleButton
-
-State.ToggleButton = ToggleButton
-
+local StatusGui={Enabled=false,Destroy=function()end}
+local ToggleButton={Parent=true}
 local function updateStatus(force)
     if State.Destroyed or not ToggleButton.Parent then
         return
@@ -1117,7 +1093,7 @@ local function updateStatus(force)
     ToggleButton.BackgroundColor3 = State.Enabled
         and Color3.fromRGB(36, 165, 91)
         or Color3.fromRGB(164, 55, 62)
-    StatusGui.Enabled = State.GuiVisible
+    StatusGui.Enabled = false
 end
 
 local function reportError(context, message)
@@ -13522,31 +13498,6 @@ function State:Destroy()
     end
 end
 
-State.LifetimeConnections[#State.LifetimeConnections + 1] =
-    UserInputService.InputBegan:Connect(guarded("toggle", function(input, processed)
-        if UserInputService:GetFocusedTextBox() then
-            return
-        end
-        if input.KeyCode == Enum.KeyCode.F6 and not processed then
-            print("[Ink Auto Dodge Audit] " .. State:GetAuditJSON(24))
-            return
-        end
-        if input.KeyCode == Enum.KeyCode.RightShift then
-            State.GuiVisible = not State.GuiVisible
-            StatusGui.Enabled = State.GuiVisible
-            return
-        end
-        if not processed and input.KeyCode == State.ToggleKey then
-            State:SetEnabled(not State.Enabled)
-        end
-    end))
-
-State.LifetimeConnections[#State.LifetimeConnections + 1] =
-    State.ToggleButton.Activated:Connect(guarded("gui toggle", function()
-        if not State.Destroyed then
-            State:SetEnabled(not State.Enabled)
-        end
-    end))
-
+State.HubOnly=true
 updateStatus(true)
-
+return State
