@@ -14,7 +14,7 @@ Black interface with a game-category sidebar, instant game/script search, and Ai
 
 ## Included
 
-- Universal: soft camera lock with a red target highlight.
+- Universal: PC-only soft camera lock with shift-lock compensation and a red target highlight.
 - Ink Game: auto-dodge using the available native dash.
 - Funky Friday: autoplay with taps, holds, and chords.
 - rosu!mania: autoplay with native lane presses and hold releases.

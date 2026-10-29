@@ -2,7 +2,7 @@
 local SOURCES={
 Camera=[====[
 -- Soft Camera Lock (Shift Lock compensated)
--- Tap the blank button to lock / unlock. E also works.
+-- Press E to lock / unlock
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -10,22 +10,10 @@ local RunService = game:GetService("RunService")
 local LP = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 local Mouse = LP:GetMouse()
-local Env = type(getgenv)=="function" and getgenv() or _G
-local previous = Env.__INK_SOFT_CAMERA_MOBILE
-if previous and type(previous.Destroy)=="function" then previous:Destroy() end
-local oldAim=Env.__INK_E_AIMLOCK
-if oldAim and type(oldAim.Destroy)=="function" then oldAim:Destroy() end
-local Connections = {}
-local Gui={Enabled=false,Destroy=function()end}
-local Button={Parent=true}
+
 local LockedPlayer = nil
 local Highlight = nil
-local NativeFrame=nil
-local NativeFocus=nil
-local NativeCamera=nil
-local OutputRotation=nil
-local PRE_BIND="SoftMobileLockBeforeCamera"
-local POST_BIND="SoftMobileLockAfterCamera"
+local FollowConnection = nil
 
 local LOCK_STRENGTH = 0.78
 local MAX_LOCK_DISTANCE = 90
@@ -40,16 +28,11 @@ local function clearLock()
 		Highlight:Destroy()
 		Highlight = nil
 	end
-	RunService:UnbindFromRenderStep(PRE_BIND)
-	RunService:UnbindFromRenderStep(POST_BIND)
-	if NativeCamera and workspace.CurrentCamera==NativeCamera and NativeFrame
-        and NativeCamera.CameraType~=Enum.CameraType.Scriptable then
-        NativeCamera.CFrame=NativeFrame
-        if NativeFocus then NativeCamera.Focus=NativeFocus end
-    end
-    NativeFrame=nil;NativeFocus=nil;NativeCamera=nil;OutputRotation=nil
+	if FollowConnection then
+		FollowConnection:Disconnect()
+		FollowConnection = nil
+	end
 	LockedPlayer = nil
-	Button.BackgroundColor3=Color3.fromRGB(164,55,62)
 	print("Camera unlocked")
 end
 
@@ -95,13 +78,7 @@ end
 
 local function getClosestPlayer()
 	-- Exact raycast first
-	local unitRay
-	if UIS.TouchEnabled then
-		local center=Camera.ViewportSize*.5
-		unitRay=Camera:ViewportPointToRay(center.X,center.Y)
-	else
-		unitRay=Camera:ScreenPointToRay(Mouse.X,Mouse.Y)
-	end
+	local unitRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = {LP.Character, Camera}
@@ -154,81 +131,59 @@ local function startLock(player)
 	if not getAimPosition(player.Character) then return end
 
 	LockedPlayer = player
-	Button.BackgroundColor3=Color3.fromRGB(36,165,91)
 	Highlight = createHighlight(player.Character)
 
-    -- Restore the game's unmodified camera before its controller reads the previous frame.
-    RunService:BindToRenderStep(PRE_BIND,Enum.RenderPriority.Camera.Value-1,function()
-        local camera=workspace.CurrentCamera
-        if camera==NativeCamera and NativeFrame and camera.CameraType~=Enum.CameraType.Scriptable then
-            camera.CFrame=NativeFrame
-            if NativeFocus then camera.Focus=NativeFocus end
-        end
-    end)
-    -- Let normal follow/zoom finish, then change orientation at exactly that position.
-    RunService:BindToRenderStep(POST_BIND,Enum.RenderPriority.Camera.Value+1,function(dt)
-        Camera=workspace.CurrentCamera
-        local own=LP.Character
-        local ownHumanoid=own and own:FindFirstChildOfClass("Humanoid")
-        local character=LockedPlayer and LockedPlayer.Character
-        local humanoid=character and character:FindFirstChildOfClass("Humanoid")
-        if not Camera or not ownHumanoid or ownHumanoid.Health<=0
-            or not humanoid or humanoid.Health<=0 then clearLock();return end
-        if Camera.CameraType==Enum.CameraType.Scriptable then
-            NativeFrame=nil;NativeFocus=nil;OutputRotation=nil;return
-        end
-        if NativeCamera~=Camera then OutputRotation=nil end
-        NativeCamera=Camera;NativeFrame=Camera.CFrame;NativeFocus=Camera.Focus
-        local targetPos=getAimPosition(character)
-        if not targetPos or UIS:GetFocusedTextBox() then OutputRotation=nil;return end
-        if not Highlight or Highlight.Parent~=character then Highlight=createHighlight(character) end
-        local position=NativeFrame.Position
-        if (targetPos-position).Magnitude<.01 then return end
-        local alpha=1-(1-LOCK_STRENGTH)^(math.clamp(dt,0,.1)*60)
-        local desired=CFrame.lookAt(position,targetPos).Rotation
-        OutputRotation=(OutputRotation or NativeFrame.Rotation):Lerp(desired,alpha)
-        Camera.CFrame=CFrame.new(position)*OutputRotation
-    end)
+	FollowConnection = RunService.RenderStepped:Connect(function()
+		if not LockedPlayer or not LockedPlayer.Character then
+			clearLock()
+			return
+		end
+
+		local targetPos = getAimPosition(LockedPlayer.Character)
+		if not targetPos then return end
+
+		if not Highlight or Highlight.Parent ~= LockedPlayer.Character then
+			if Highlight then Highlight:Destroy() end
+			Highlight = createHighlight(LockedPlayer.Character)
+		end
+
+		local camPos = Camera.CFrame.Position
+		local desired = CFrame.lookAt(camPos, targetPos)
+		Camera.CFrame = Camera.CFrame:Lerp(desired, LOCK_STRENGTH)
+	end)
 
 	print("Locked onto:", player.Name)
 end
 
-local function toggleLock()
-    if LockedPlayer then clearLock();return end
-    Camera=workspace.CurrentCamera
-    if not Camera then return end
-    local target=getClosestPlayer()
-    if target then startLock(target) else print("No nearby player found") end
-end
-Connections[1]=Players.PlayerRemoving:Connect(function(player)
+local removingConnection=Players.PlayerRemoving:Connect(function(player)
 	if player == LockedPlayer then
 		clearLock()
 	end
 end)
 
-local Controller={}
-function Controller:Destroy()
-    self.Destroyed=true
-    clearLock()
-    for _,connection in ipairs(Connections) do connection:Disconnect() end
-    Gui:Destroy()
-    if Env.__INK_SOFT_CAMERA_MOBILE==self then Env.__INK_SOFT_CAMERA_MOBILE=nil end
-end
-Controller.Gui=Gui
-Controller.HubOnly=true
+local Controller={HubOnly=true,Destroyed=false}
 function Controller:SetEnabled(value)
+    if self.Destroyed then return end
     if value then
-        if not LockedPlayer then toggleLock() end
+        assert(UIS.KeyboardEnabled,"This aimlock is PC only")
+        if not LockedPlayer then
+            local target=getClosestPlayer()
+            if target then startLock(target) end
+        end
     else clearLock() end
 end
 function Controller:GetSnapshot()
     return {Enabled=LockedPlayer~=nil,Status=LockedPlayer and ("Locked: "..LockedPlayer.DisplayName) or "Off"}
 end
-Gui.Enabled=false
-Env.__INK_SOFT_CAMERA_MOBILE=Controller
-print("Mobile Soft Camera Lock loaded | Tap blank button (red=OFF, green=ON)")
+function Controller:Destroy()
+    if self.Destroyed then return end
+    self.Destroyed=true
+    clearLock()
+    removingConnection:Disconnect()
+    if getgenv().__INK_SOFT_CAMERA_MOBILE==self then getgenv().__INK_SOFT_CAMERA_MOBILE=nil end
+end
+getgenv().__INK_SOFT_CAMERA_MOBILE=Controller
 return Controller
-
 ]====],
 Dodge=[====[
 -- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC + Mobile)
@@ -14107,12 +14062,13 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="Torso tracking · red highlight",Badge="Universal",Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
+    {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="PC only · shift-lock compensation · red highlight",Badge="PC only",PCOnly=true,Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="ff",Section="Funky Friday",Category="Rhythm",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
     {Id="rosu",Section="rosu!mania",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and releases · local charts",Badge="rosu!mania",Game=ROSU,Key="__ROSU_AUTOPLAY",Source="Rosu"},
 }
 local function snapshot(feature)
+    if feature.PCOnly and not UIS.KeyboardEnabled then return {Enabled=false,Status="PC only"} end
     if feature.Unavailable then return {Enabled=false,Status="Unavailable"} end
     if feature.Game and feature.Game~=game.GameId then return {Enabled=false,Status="Open "..feature.Section} end
     if feature.Id=="ff" then
@@ -14130,6 +14086,7 @@ local function snapshot(feature)
 end
 local function change(feature)
     if hub.Destroyed or hub.Busy[feature.Id] then return end
+    if feature.PCOnly and not UIS.KeyboardEnabled then note="This aimlock is PC only.";return end
     if feature.Unavailable then note="This script has not been completed.";return end
     if feature.Game and feature.Game~=game.GameId then note="Open "..feature.Section.." to use this feature.";return end
     hub.Busy[feature.Id]=true
