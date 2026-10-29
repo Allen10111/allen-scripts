@@ -24,3 +24,7 @@ All scripts start OFF. Individual script buttons and hotkeys are removed in the 
 Game-specific controls are disabled in other games. Tug of War, Mingle, and the scrapped auto-combat project are excluded.
 
 The hub and bundled engines are readable, not obfuscated. Executor support is required; Funky Friday additionally requires Actor execution. Compatibility can change with game updates.
+
+## Mobile
+
+The GUI adapts to touch screens with portrait and landscape layouts, a scrollable Games menu, swipeable section tabs, 44-pixel switches, and a touch drag handle. Safe-area and on-screen-keyboard changes are handled automatically. Tap AS to reopen the window. The executor must still support the APIs required by each game, including Actor execution for Funky Friday.
