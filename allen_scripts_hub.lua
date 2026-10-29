@@ -231,8 +231,8 @@ return Controller
 
 ]====],
 Dodge=[====[
--- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC)
--- F1 toggles the system. It starts OFF.
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC + Mobile)
+-- Tap the blank button on mobile; use the button or F1 on PC. Starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
 --
@@ -263,7 +263,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
--- Hub switch replaces the PC keyboard gate on touch devices.
+-- Native dash logic works independently of keyboard hardware.
 assert(type(getconnections)=="function" and debug and type(debug.getupvalues)=="function",
     "Auto Dodge requires getconnections and debug.getupvalues; this executor is missing those APIs")
 
