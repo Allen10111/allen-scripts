@@ -14134,6 +14134,129 @@ print("[Funky Duels Autoplay] Loaded OFF. Controlled by the hub switch.")
 return state
 
 ]====],
+MMM=[====[
+-- Allen Scripts: Monday Morning Misery. Hub-controlled native lane autoplay.
+assert(game.GameId==2802559498,"Open Monday Morning Misery")
+assert(type(getgc)=="function" and debug and type(debug.getupvalues)=="function" and type(debug.info)=="function","Executor requires getgc, debug.getupvalues and debug.info")
+local env=getgenv()
+if env.__MMM_AUTOPLAY then env.__MMM_AUTOPLAY:Destroy()end
+local RunService=game:GetService("RunService")
+local UIS=game:GetService("UserInputService")
+local GuiService=game:GetService("GuiService")
+local methods
+for _,value in ipairs(getgc(true))do
+    if type(value)=="table" and type(rawget(value,"_GetClosestNote"))=="function" and type(rawget(value,"_ArrowPressed"))=="function" then methods=value;break end
+end
+assert(methods,"Monday Morning Misery note engine not ready")
+local state={HubOnly=true,Enabled=false,Destroyed=false,Held={},Bindings={},Hits=0,Holds=0,Errors=0,Status="Off",NextScan=0}
+local function dangerous(note)
+    if not note or not note[1] then return true end
+    local config=note[3]
+    return config and type(config.IsDangerous)=="table" and config.IsDangerous[note[1]:GetAttribute("NoteType")]==true
+end
+function state:Release()
+    for _,held in pairs(self.Held)do pcall(held.Binding.Activate,3)end
+    table.clear(self.Held)
+end
+function state:SetEnabled(value)
+    self:Release();self.Enabled=value==true and not self.Destroyed
+    self.Status=self.Enabled and "Waiting for song" or "Off"
+end
+function state:GetSnapshot()
+    return {Enabled=self.Enabled,Status=self.Status,Hits=self.Hits,Holds=self.Holds,Errors=self.Errors,LastError=self.LastError}
+end
+function state:Destroy()
+    if self.Destroyed then return end
+    self:SetEnabled(false);self.Destroyed=true
+    if self.Connection then self.Connection:Disconnect()end
+    table.clear(self.Bindings)
+    if env.__MMM_AUTOPLAY==self then env.__MMM_AUTOPLAY=nil end
+end
+function state:FindBindings(context)
+    self.NextScan=os.clock()+1
+    table.clear(self.Bindings)
+    local side=({"Left","Right"})[context.PlayerType]
+    local gui=context.ArrowGui
+    local sideGui=gui and side and gui:FindFirstChild(side)
+    local container=sideGui and sideGui:FindFirstChild("MainArrowContainer")
+    if not container then return end
+    for _,fn in ipairs(getgc())do
+        if type(fn)=="function" then
+            local ok,name=pcall(debug.info,fn,"n")
+            if ok and name=="ActivateArrow" then
+                local up=debug.getupvalues(fn)
+                local owner,arrow=up[1],up[8]
+                if type(owner)=="table" and typeof(arrow)=="Instance" and arrow.Parent==container and type(owner._CantHitNotes)=="function" then
+                    self.Bindings[arrow.Name]={Activate=fn,Owner=owner,Arrow=arrow}
+                end
+            end
+        end
+    end
+    local count=0;for _ in pairs(self.Bindings)do count+=1 end
+    if count>=(context.MaxArrows or 4) then self.NextScan=math.huge end
+end
+state.Connection=RunService.RenderStepped:Connect(function(dt)
+    if not state.Enabled or state.Destroyed then return end
+    local ok,message=pcall(function()
+        local up=debug.getupvalues(methods._GetClosestNote)
+        local lanes,options,context=up[1],up[2],up[5]
+        local gui=context.ArrowGui
+        if not gui or not gui.Parent or not options then state:Release();state.Status="Waiting for song";return end
+        if state.RoundGui~=gui or state.PlayerType~=context.PlayerType then
+            state:Release();table.clear(state.Bindings);state.RoundGui=gui;state.PlayerType=context.PlayerType;state.NextScan=0
+        end
+        if os.clock()>=state.NextScan then state:FindBindings(context)end
+        if not next(state.Bindings) then state.Status="Waiting for lane controls";return end
+        if UIS:GetFocusedTextBox() or GuiService.MenuIsOpen then state:Release();state.Status="Paused for menu / typing";return end
+        local down=options.DownScroll==true
+        local speed=methods:_GetNoteSpeed()
+        local target=down and 1 or 0
+        for name,binding in pairs(state.Bindings)do
+            if binding.Owner:_CantHitNotes() then state:Release();state.Status="Input locked";return end
+            local held=state.Held[name]
+            if held then
+                local tail=held.Tail
+                local finished=not tail or not tail.Parent or not tail.Visible
+                if not finished then
+                    local tip=tail.Position.Y.Scale+(down and -1 or 1)*tail.Size.Y.Scale
+                    finished=down and tip>=target or not down and tip<=target
+                end
+                if finished then binding.Activate(3);state.Held[name]=nil end
+            end
+            local list=lanes[name]
+            local candidate
+            for _,note in ipairs(list or {})do
+                local head=note[1]
+                if head and head.Parent and not dangerous(note) then
+                    local remaining=(down and (target-head.Position.Y.Scale) or (head.Position.Y.Scale-target))/speed
+                    if remaining<=math.min(dt*.5,.012) and remaining>=-.09 then candidate=note;break end
+                end
+            end
+            if candidate then
+                -- Confirm the game would select the same safe note before using its input callback.
+                local selected=binding.Owner:_GetClosestNote(binding.Arrow)
+                if selected and selected[1]==candidate and not dangerous(selected[1])then
+                    binding.Activate(1)
+                    local result=debug.getupvalues(binding.Activate)[2]
+                    if result and result[1]==candidate then
+                        state.Hits+=1
+                        local tail=candidate[2]
+                        if tail and tail.Parent and tail.Visible then state.Held[name]={Binding=binding,Tail=tail};state.Holds+=1
+                        else binding.Activate(3);state.Held[name]=nil end
+                    end
+                end
+            end
+        end
+        state.Status="Playing local lanes"
+    end)
+    if not ok then state.Errors+=1;state.LastError=tostring(message);state:SetEnabled(false);state.Status="Engine error";warn("[MMM Autoplay] "..state.LastError)end
+end)
+env.__MMM_AUTOPLAY=state
+state:SetEnabled(false)
+print("[MMM Autoplay] Loaded OFF; controlled by the hub switch.")
+return state
+
+]====],
 }
 -- Allen Scripts general hub. Feature sources are bundled by the build script.
 local Players=game:GetService("Players")
@@ -14143,8 +14266,8 @@ local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
 local hub={Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
-local INK,FF,ROSU,DUELS=7008097940,2404080894,3405992067,10766630653
-local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or "Other experience"
+local INK,FF,ROSU,DUELS,MMM=7008097940,2404080894,3405992067,10766630653,2802559498
+local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or "Other experience"
 local note="Browse the library. All features start OFF."
 local ffFolder,ffActor
 local function execute(name)
@@ -14173,8 +14296,16 @@ local features={
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="ff",Section="Funky Friday",Category="Rhythm",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
     {Id="duels",Section="Funky Duels",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · skips hurt notes",Badge="Funky Duels",Game=DUELS,Key="__FUNKY_DUELS_AUTOPLAY",Source="Duels"},
+    {Id="mmm",Section="Monday Morning Misery",Category="Rhythm",Name="Auto Play",Subtitle="Native taps and holds · local lanes",Badge="Monday Morning Misery",Game=MMM,Key="__MMM_AUTOPLAY",Source="MMM"},
     {Id="rosu",Section="rosu!mania",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and releases · local charts",Badge="rosu!mania",Game=ROSU,Key="__ROSU_AUTOPLAY",Source="Rosu"},
 }
+local gameCategories={"All"}
+local knownCategories={}
+for _,feature in ipairs(features)do
+    if not knownCategories[feature.Section]then
+        knownCategories[feature.Section]=true;gameCategories[#gameCategories+1]=feature.Section
+    end
+end
 local function snapshot(feature)
     if feature.PCOnly and not UIS.KeyboardEnabled then return {Enabled=false,Status="PC only"} end
     if feature.Unavailable then return {Enabled=false,Status="Unavailable"} end
@@ -14343,7 +14474,7 @@ connect(clearSearch.Activated,function()search.Text="";search:ReleaseFocus()end)
 connect(currentGame.Activated,function()currentOnly=not currentOnly;drawerOpen=false;scroll.CanvasPosition=Vector2.zero;render()end)
 connect(gamesMenu.Activated,function()drawerOpen=not drawerOpen;render()end)
 connect(dismiss.Activated,function()drawerOpen=false;render()end)
-for index,name in ipairs({"All","Universal","Ink Game","Funky Friday","Funky Duels","rosu!mania"})do
+for index,name in ipairs(gameCategories)do
     local item=button(sidebar,name=="All" and "All scripts" or name,10,47+(index-1)*43,134,34)
     categoryButtons[name]=item
     connect(item.Activated,function()selectedGame=name;currentOnly=false;drawerOpen=false;scroll.CanvasPosition=Vector2.zero;render()end)
@@ -14416,13 +14547,13 @@ local function applyLayout(size,touch)
         x,y,cw,sh=12,208,w-24,math.max(42,h-262)
         place(footer,14,h-43,w-28,38);footer.TextSize=10
         place(sidebar,12,178,230,math.max(72,math.min(418,h-194)))
-        sidebar.CanvasSize=UDim2.fromOffset(0,418);sidebar.ZIndex=30
+        sidebar.CanvasSize=UDim2.fromOffset(0,100+#gameCategories*48);sidebar.ZIndex=30
         place(dismiss,0,176,w,h-176)
         place(gamesLabel,14,12,200,20);gamesLabel.TextSize=12
-        for i,name in ipairs({"All","Universal","Ink Game","Funky Friday","Funky Duels","rosu!mania"})do
+        for i,name in ipairs(gameCategories)do
             place(categoryButtons[name],12,42+(i-1)*48,206,44);categoryButtons[name].TextSize=13
         end
-        place(currentGame,12,342,206,44);currentGame.TextSize=13
+        place(currentGame,12,54+#gameCategories*48,206,44);currentGame.TextSize=13
         libraryCount.Visible=false
     else
         place(header,0,0,600,78);place(badge,20,20,38,38)
@@ -14438,10 +14569,10 @@ local function applyLayout(size,touch)
         place(footer,196,520,498,32);footer.TextSize=10
         place(sidebar,20,98,154,452);sidebar.CanvasSize=UDim2.fromOffset(0,452);sidebar.ZIndex=1
         place(gamesLabel,14,16,120,18);gamesLabel.TextSize=10
-        for i,name in ipairs({"All","Universal","Ink Game","Funky Friday","Funky Duels","rosu!mania"})do
+        for i,name in ipairs(gameCategories)do
             place(categoryButtons[name],10,47+(i-1)*43,134,34);categoryButtons[name].TextSize=12
         end
-        place(currentGame,10,327,134,32);currentGame.TextSize=12
+        place(currentGame,10,59+#gameCategories*43,134,32);currentGame.TextSize=12
         place(libraryCount,14,416,126,18);libraryCount.Visible=true
     end
     for _,object in ipairs(sidebar:GetDescendants())do if object:IsA("GuiObject")then object.ZIndex=compact and 31 or 2 end end

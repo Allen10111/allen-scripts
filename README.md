@@ -19,6 +19,7 @@ Black interface with a game-category sidebar, instant game/script search, and Ai
 - Funky Friday: autoplay with taps, holds, and chords.
 - Funky Duels: native autoplay with taps, holds, chords, and hurt-note filtering. Requires debug.getupvalues, debug.info, and module access; mobile gameplay verification is pending.
 - rosu!mania: autoplay with native lane presses and hold releases.
+- Monday Morning Misery: native local-lane autoplay with tap and hold handling. Requires getgc, debug.getupvalues, and debug.info; mobile compatibility is unverified.
 
 All scripts start OFF. Individual script buttons and hotkeys are removed in the hub build. Use the hub switches to control features, Right Shift to hide/show the hub, or AS to reopen it. Drag the title bar to move the window.
 
