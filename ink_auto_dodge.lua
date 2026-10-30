@@ -102,7 +102,7 @@ local ZERO = Vector3.zero
 local DIRECTION_SAMPLE_TIMES = { 0.04, 0.08, 0.14, 0.22, 0.34, 0.5 }
 
 local State = {
-    Version = 8.04,
+    Version = 8.05,
     MinimumActionPlanningBudget = 0.0018,
     PlanningReserveUses = 0,
     LocalRestCorrections = 0,
@@ -1631,6 +1631,18 @@ local function bindExact(id, base, fields)
     EXACT_PROFILES[tostring(id)] = profile
     return profile
 end
+
+-- Exact identity, conservative onset envelope: the replicated push can
+-- already have applied stun before the generic 140 ms area windup. This
+-- deliberately covers phase zero; it is not a verified server hitbox.
+bindExact("104041807075625", PROFILE_AREA, {
+    Name = "Push 1", ActiveStart = 0, ActiveEnd = 0.48,
+    AnimationLength = 1,
+})
+bindExact("103318207627541", PROFILE_AREA, {
+    Name = "Push 2", ActiveStart = 0, ActiveEnd = 0.48,
+    AnimationLength = 1,
+})
 
 -- Timelines are expressed in animation-time seconds. The live animation
 -- lengths were measured in this universe, and every damaging non-gun weapon
@@ -11480,6 +11492,21 @@ function State:ObserveLocalRecovery(character)
     local blocked=character:FindFirstChild("Ragdoll")~=nil
         or character:FindFirstChild("DisableDash")~=nil
         or self:NativeDashStunReason(character)~=nil
+    if blocked and not self.RecoveryBlocked then
+        local recent={}
+        for _,threat in ipairs(self.Pending)do
+            if #recent>=4 then break end
+            recent[#recent+1]={Id=threat.AnimationId or "",Name=threat.Profile.Name,
+                Phase=threat.LogicalElapsed or 0,Contact=threat.ContactIn,
+                Gate=threat.LastEvaluationReason or "Not evaluated",
+                Requests=threat.RequestCount or 0}
+        end
+        pushReplay("local_control_lost",os.clock(),{
+            Reason=character:FindFirstChild("Ragdoll") and "Ragdoll"
+                or character:FindFirstChild("DisableDash") and "DisableDash"
+                or self:NativeDashStunReason(character),
+            Decision=self.LastBlockReason or "None",Threats=recent})
+    end
     local recovered=self.RecoveryBlocked and not blocked
     self.RecoveryBlocked=blocked
     if not recovered then return false end
@@ -11504,7 +11531,7 @@ end
 -- and reconsiders still-active attacks immediately after local recovery.
 function State:SweepNearbyAttackTracks(now, localRoot, generation)
     if now<(self.NextAnimationSweepAt or 0) then return end
-    self.NextAnimationSweepAt=now+0.12
+    self.NextAnimationSweepAt=now+1/30
     local force=self.RecoverySweepPending==true
     self.RecoverySweepPending=false
     local existing={}
@@ -11658,6 +11685,9 @@ local function processFrame(deltaTime, generation)
                         localRoot,
                         State.LocalMotion
                     )
+                    threat.LastEvaluationReason = ok and (valid
+                        and (threat.ContactIn and "Collision predicted" or "No collision predicted")
+                        or reason) or "Evaluation error"
                     evaluatedThreats += 1
                     if not ok then
                         threat.ErrorCount = (threat.ErrorCount or 0) + 1
@@ -11816,13 +11846,14 @@ local function evaluateImmediately(threat, now, allowDodge)
             watcher.Motion = sampleMotion(watcher.Motion, watcher.Root, now)
         end
     end
-    local valid = evaluateThreat(
+    local valid, reason = evaluateThreat(
         threat,
         now,
         localCharacter,
         localRoot,
         State.LocalMotion
     )
+    threat.LastEvaluationReason = valid and (threat.ContactIn and "Collision predicted" or "No collision predicted") or reason
     if not valid then
         threat.ContactIn = nil
         threat.Emergency = false
@@ -13259,6 +13290,13 @@ function State:RunSelfTest()
     end
     local cancelledProbe = { Track = { IsPlaying = false }, StoppedPhase = 0.01,
         DashAttack = true, DashWalkBridgeUntil = math.huge }
+    local pushOne=EXACT_PROFILES["104041807075625"]
+    local pushTwo=EXACT_PROFILES["103318207627541"]
+    result.PushOnsetCovered = pushOne and pushTwo
+        and pushOne.ActiveStart == 0 and pushTwo.ActiveStart == 0
+        and pushOne.ActiveEnd >= 0.48 and pushTwo.ActiveEnd >= 0.48
+    result.PushShortTrackNotFalseCancelled = not self:IsCancelledAttack(
+        cancelledProbe,pushOne.ActiveStart)
     result.DashCannotReviveCancelledWindup = self:IsCancelledAttack(cancelledProbe, 0.3)
     cancelledProbe.StoppedPhase = 0.35
     result.ActiveAttackSurvivesTrackStop = not self:IsCancelledAttack(cancelledProbe, 0.3)
