@@ -11470,6 +11470,69 @@ local function disconnectWatcher(character)
     end
 end
 
+-- Recovery invalidates predictions built from ragdoll physics, not native cooldowns.
+function State:ObserveLocalRecovery(character)
+    if self.RecoveryCharacter~=character then
+        self.RecoveryCharacter=character
+        self.RecoveryBlocked=false
+    end
+    if not character then return false end
+    local blocked=character:FindFirstChild("Ragdoll")~=nil
+        or character:FindFirstChild("DisableDash")~=nil
+        or self:NativeDashStunReason(character)~=nil
+    local recovered=self.RecoveryBlocked and not blocked
+    self.RecoveryBlocked=blocked
+    if not recovered then return false end
+    self.RecoveryRefreshes=(self.RecoveryRefreshes or 0)+1
+    self:ClearDashControllerCache()
+    self.LocalMotion=nil
+    self.DodgePlan=nil
+    self.NextMpcAt=0
+    self.NextAnimationSweepAt=0
+    self.RecoverySweepPending=true
+    table.clear(self.TerrainResultCache)
+    for _,threat in ipairs(self.Pending)do
+        threat.TerrainBlockedUntil=nil
+        threat.PreviousRelative=nil
+        threat.PreviousRelativeAt=nil
+    end
+    pushReplay("local_recovered",os.clock(),{Reason="Native recovery markers cleared"})
+    return true
+end
+
+-- AnimationPlayed stays primary. A bounded sweep catches a missed callback
+-- and reconsiders still-active attacks immediately after local recovery.
+function State:SweepNearbyAttackTracks(now, localRoot, generation)
+    if now<(self.NextAnimationSweepAt or 0) then return end
+    self.NextAnimationSweepAt=now+0.12
+    local force=self.RecoverySweepPending==true
+    self.RecoverySweepPending=false
+    local existing={}
+    for _,threat in ipairs(self.Pending)do if threat.Track then existing[threat.Track]=true end end
+    local nearest={}
+    for _,watcher in pairs(self.Watchers)do
+        if watcher.Root and watcher.Animator then
+            local distance=(watcher.Root.Position-localRoot.Position).Magnitude
+            if distance<=60 then nearest[#nearest+1]={Watcher=watcher,Distance=distance}end
+        end
+    end
+    table.sort(nearest,function(a,b)return a.Distance<b.Distance end)
+    for index=1,math.min(#nearest,8)do
+        local watcher=nearest[index].Watcher
+        local ok,tracks=pcall(watcher.Animator.GetPlayingAnimationTracks,watcher.Animator)
+        if ok then
+            for i=1,math.min(#tracks,24)do
+                local track=tracks[i]
+                if not existing[track] and (force or not self.SeenTracks[track])then
+                    if force then self.SeenTracks[track]=nil end
+                    watcher.QueueAttack(watcher.Character,track,generation)
+                    self.AnimationSweepCandidates=(self.AnimationSweepCandidates or 0)+1
+                end
+            end
+        end
+    end
+end
+
 local function sampleCharacters(now, localRoot)
     local localPosition = localRoot.Position
     for _, watcher in pairs(State.Watchers) do
@@ -11519,6 +11582,7 @@ local function processFrame(deltaTime, generation)
         end
     end
     local localCharacter, localHumanoid, localRoot = getLocalCharacter()
+    State:ObserveLocalRecovery(localCharacter)
     -- Track power transitions even with no active threat.  This resets the
     -- fallback RecentDash baseline on unequip/re-equip, so a normal dash from
     -- another power cannot be miscounted as a Phantom charge.
@@ -11527,6 +11591,7 @@ local function processFrame(deltaTime, generation)
     if localCharacter and localRoot then
         State.LocalMotion = sampleMotion(State.LocalMotion, localRoot, now)
         sampleCharacters(now, localRoot)
+        State:SweepNearbyAttackTracks(now, localRoot, generation)
     else
         State.LocalMotion = nil
     end
@@ -12170,6 +12235,13 @@ queueAttack = function(attackerCharacter, track, generation, forceDashRetry)
     evaluateImmediately(threat, now, false)
     dodgeMostUrgentNow(now)
     updateStatus(false)
+end
+
+function State:GetSnapshot()
+    local reason=self.LastBlockReason
+    local status=not self.Enabled and "Off" or reason and reason~="None" and reason or "Watching attacks"
+    return {Enabled=self.Enabled,Status=status,RecoveryRefreshes=self.RecoveryRefreshes or 0,
+        AnimationSweepCandidates=self.AnimationSweepCandidates or 0,Errors=self.ErrorCount or 0}
 end
 
 function State:RunSelfTest()
@@ -13361,6 +13433,10 @@ local function stopActiveWork()
     State.FlingBrakeUntil = 0
     State.SeenTracks = setmetatable({}, { __mode = "k" })
     State.LocalMotion = nil
+    State.RecoveryCharacter = nil
+    State.RecoveryBlocked = false
+    State.RecoverySweepPending = false
+    State.NextAnimationSweepAt = 0
     State.AttemptPending = nil
     State.DodgePlan = nil
     State.NextMpcAt = 0
