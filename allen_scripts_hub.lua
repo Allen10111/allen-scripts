@@ -14292,7 +14292,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="PC only · shift-lock compensation · red highlight",Badge="PC only",PCOnly=true,Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
+    {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="PC only · E to lock/unlock · red highlight",Badge="PC only",PCOnly=true,Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="ff",Section="Funky Friday",Category="Rhythm",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
     {Id="duels",Section="Funky Duels",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · skips hurt notes",Badge="Funky Duels",Game=DUELS,Key="__FUNKY_DUELS_AUTOPLAY",Source="Duels"},
@@ -14628,7 +14628,11 @@ connect(UIS.WindowFocusReleased,function()drag=nil end)
 connect(hide.Activated,function()window.Visible=false end)
 connect(launcher.Activated,function()window.Visible=not window.Visible end)
 connect(UIS.InputBegan,function(input,processed)
-    if not processed and not UIS:GetFocusedTextBox() and input.KeyCode==Enum.KeyCode.RightShift then window.Visible=not window.Visible end
+    if processed or UIS:GetFocusedTextBox() then return end
+    if input.KeyCode==Enum.KeyCode.RightShift then window.Visible=not window.Visible
+    elseif input.KeyCode==Enum.KeyCode.E and UIS.KeyboardEnabled then
+        for _,feature in ipairs(features)do if feature.Id=="camera" then change(feature);break end end
+    end
 end)
 function hub:Destroy()
     if self.Destroyed then return end
