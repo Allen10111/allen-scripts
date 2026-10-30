@@ -14027,6 +14027,113 @@ task.spawn(function()
 end)
 
 ]=====],
+Duels=[====[
+-- Allen Scripts: Funky Duels native autoplay. Starts OFF.
+assert(game.GameId==10766630653,"Open Funky Duels to use this script")
+assert(debug and type(debug.getupvalues)=="function","Executor requires debug.getupvalues")
+local env=getgenv()
+if env.__FUNKY_DUELS_AUTOPLAY then env.__FUNKY_DUELS_AUTOPLAY:Destroy() end
+local Players=game:GetService("Players")
+local RunService=game:GetService("RunService")
+local UIS=game:GetService("UserInputService")
+local GuiService=game:GetService("GuiService")
+local client=Players.LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Client",10)
+assert(client,"Funky Duels client not ready")
+local Note=require(client.Gameplay.Note)
+local Input=require(client.Gameplay.Input)
+local Conductor=require(client.Gameplay.Conductor)
+local GameState=require(client.Core.State)
+local hurtType=require(game:GetService("ReplicatedStorage").Shared.Constants).Match.HurtNoteType
+local bindKeyboard=debug.getupvalues(Input.Init)[8]
+assert(type(bindKeyboard)=="function" and debug.info(bindKeyboard,"n")=="bindKeyboard","Input layout changed")
+local bindings=debug.getupvalues(bindKeyboard)
+local press,release=bindings[5],bindings[6]
+assert(type(press)=="function" and type(release)=="function" and debug.info(press,"n")=="handlePress" and debug.info(release,"n")=="handleRelease","Input callbacks unavailable")
+local state={Enabled=false,Destroyed=false,Held={},Hits=0,Errors=0,Status="Off",Connections={}}
+local directions={"Left","Down","Up","Right"}
+function state:Release()
+    for dir in pairs(self.Held)do pcall(release,dir)end
+    table.clear(self.Held)
+end
+function state:SetEnabled(value)
+    self:Release()
+    self.Enabled=value==true and not self.Destroyed
+    self.Status=self.Enabled and "Waiting for song" or "Off"
+    if self.Switch then
+        self.Switch.BackgroundColor3=self.Enabled and Color3.fromRGB(45,157,87) or Color3.fromRGB(60,60,65)
+        self.Thumb.Position=UDim2.new(self.Enabled and 1 or 0,self.Enabled and -29 or 3,.5,-13)
+    end
+end
+function state:GetSnapshot()
+    return {Enabled=self.Enabled,Status=self.Status,Hits=self.Hits,Errors=self.Errors,LastError=self.LastError}
+end
+function state:Destroy()
+    if self.Destroyed then return end
+    self:SetEnabled(false);self.Destroyed=true
+    for _,c in ipairs(self.Connections)do c:Disconnect()end
+    if self.Gui then self.Gui:Destroy()end
+    if env.__FUNKY_DUELS_AUTOPLAY==self then env.__FUNKY_DUELS_AUTOPLAY=nil end
+end
+state.Connections[1]=RunService.RenderStepped:Connect(function()
+    if not state.Enabled or state.Destroyed then return end
+    local ok,message=pcall(function()
+        local values=debug.getupvalues(Note.TryHitNote)
+        local notes,context,offset=values[3],values[4],values[2]
+        if type(notes)~="table" or type(context)~="table" then error("Note layout changed")end
+        if GameState.GetState()~="InGame" or context.RoundOver or context.RoundInputLocked or Note.IsPaused() or context.IsPaused() then
+            state:Release();state.Status="Waiting / paused";return
+        end
+        if UIS:GetFocusedTextBox() or GuiService.MenuIsOpen then state:Release();state.Status="Paused for menu / typing";return end
+        local now=Conductor.GetLiveSongTimeMs()+offset
+        local clock=os.clock()
+        local left=context.SessionLocalSide=="Left"
+        local keys=left and context.OpponentKeys or context.ArrowKeys
+        if state.Keys and state.Keys~=keys then state:Release()end
+        state.Keys=keys
+        for dir,held in pairs(state.Held)do
+            if held.EndTime and now>=held.EndTime or not held.EndTime and clock>=held.ReleaseClock then
+                release(dir);state.Held[dir]=nil
+            end
+        end
+        local due={}
+        for _,note in ipairs(notes)do
+            if not note.Hit and not note.Missed and note.IsPlayer==not left and note.Type~=hurtType and type(note.TimeMs)=="number" then
+                local delta=now-note.TimeMs
+                if delta>=0 and delta<=100 then
+                    local best=due[note.Dir]
+                    if not best or note.TimeMs<best.TimeMs then due[note.Dir]=note end
+                end
+            end
+        end
+        for _,dir in ipairs(directions)do
+            local note=due[dir]
+            if note then
+                -- Release only between taps. Keep a live hold pressed through same-lane notes.
+                local held=state.Held[dir]
+                if held and not held.EndTime then release(dir);state.Held[dir]=nil end
+                press(dir)
+                if note.Hit then
+                    state.Hits+=1
+                    local endTime=(note.HoldMs or 0)>0 and note.TimeMs+note.HoldMs or nil
+                    if held and held.EndTime then endTime=math.max(endTime or held.EndTime,held.EndTime)end
+                    state.Held[dir]={EndTime=endTime,ReleaseClock=clock+.035}
+                end
+            end
+        end
+        state.Status="Playing "..(left and "left" or "right").." lanes"
+    end)
+    if not ok then
+        state.Errors+=1;state.LastError=tostring(message);state:SetEnabled(false)
+        state.Status="Error: "..state.LastError;warn("[Funky Duels Autoplay] "..state.LastError)
+    end
+end)
+state.HubOnly=true
+env.__FUNKY_DUELS_AUTOPLAY=state
+state:SetEnabled(false)
+print("[Funky Duels Autoplay] Loaded OFF. Controlled by the hub switch.")
+return state
+
+]====],
 }
 -- Allen Scripts general hub. Feature sources are bundled by the build script.
 local Players=game:GetService("Players")
@@ -14036,8 +14143,8 @@ local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
 local hub={Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
-local INK,FF,ROSU=7008097940,2404080894,3405992067
-local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or "Other experience"
+local INK,FF,ROSU,DUELS=7008097940,2404080894,3405992067,10766630653
+local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or "Other experience"
 local note="Browse the library. All features start OFF."
 local ffFolder,ffActor
 local function execute(name)
@@ -14065,6 +14172,7 @@ local features={
     {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="PC only · shift-lock compensation · red highlight",Badge="PC only",PCOnly=true,Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="ff",Section="Funky Friday",Category="Rhythm",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
+    {Id="duels",Section="Funky Duels",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · skips hurt notes",Badge="Funky Duels",Game=DUELS,Key="__FUNKY_DUELS_AUTOPLAY",Source="Duels"},
     {Id="rosu",Section="rosu!mania",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and releases · local charts",Badge="rosu!mania",Game=ROSU,Key="__ROSU_AUTOPLAY",Source="Rosu"},
 }
 local function snapshot(feature)
@@ -14235,7 +14343,7 @@ connect(clearSearch.Activated,function()search.Text="";search:ReleaseFocus()end)
 connect(currentGame.Activated,function()currentOnly=not currentOnly;drawerOpen=false;scroll.CanvasPosition=Vector2.zero;render()end)
 connect(gamesMenu.Activated,function()drawerOpen=not drawerOpen;render()end)
 connect(dismiss.Activated,function()drawerOpen=false;render()end)
-for index,name in ipairs({"All","Universal","Ink Game","Funky Friday","rosu!mania"})do
+for index,name in ipairs({"All","Universal","Ink Game","Funky Friday","Funky Duels","rosu!mania"})do
     local item=button(sidebar,name=="All" and "All scripts" or name,10,47+(index-1)*43,134,34)
     categoryButtons[name]=item
     connect(item.Activated,function()selectedGame=name;currentOnly=false;drawerOpen=false;scroll.CanvasPosition=Vector2.zero;render()end)
@@ -14307,14 +14415,14 @@ local function applyLayout(size,touch)
         place(results,14,182,w-28,18);results.TextSize=11
         x,y,cw,sh=12,208,w-24,math.max(42,h-262)
         place(footer,14,h-43,w-28,38);footer.TextSize=10
-        place(sidebar,12,178,230,math.max(72,math.min(370,h-194)))
-        sidebar.CanvasSize=UDim2.fromOffset(0,370);sidebar.ZIndex=30
+        place(sidebar,12,178,230,math.max(72,math.min(418,h-194)))
+        sidebar.CanvasSize=UDim2.fromOffset(0,418);sidebar.ZIndex=30
         place(dismiss,0,176,w,h-176)
         place(gamesLabel,14,12,200,20);gamesLabel.TextSize=12
-        for i,name in ipairs({"All","Universal","Ink Game","Funky Friday","rosu!mania"})do
+        for i,name in ipairs({"All","Universal","Ink Game","Funky Friday","Funky Duels","rosu!mania"})do
             place(categoryButtons[name],12,42+(i-1)*48,206,44);categoryButtons[name].TextSize=13
         end
-        place(currentGame,12,294,206,44);currentGame.TextSize=13
+        place(currentGame,12,342,206,44);currentGame.TextSize=13
         libraryCount.Visible=false
     else
         place(header,0,0,600,78);place(badge,20,20,38,38)
@@ -14330,10 +14438,10 @@ local function applyLayout(size,touch)
         place(footer,196,520,498,32);footer.TextSize=10
         place(sidebar,20,98,154,452);sidebar.CanvasSize=UDim2.fromOffset(0,452);sidebar.ZIndex=1
         place(gamesLabel,14,16,120,18);gamesLabel.TextSize=10
-        for i,name in ipairs({"All","Universal","Ink Game","Funky Friday","rosu!mania"})do
+        for i,name in ipairs({"All","Universal","Ink Game","Funky Friday","Funky Duels","rosu!mania"})do
             place(categoryButtons[name],10,47+(i-1)*43,134,34);categoryButtons[name].TextSize=12
         end
-        place(currentGame,10,284,134,32);currentGame.TextSize=12
+        place(currentGame,10,327,134,32);currentGame.TextSize=12
         place(libraryCount,14,416,126,18);libraryCount.Visible=true
     end
     for _,object in ipairs(sidebar:GetDescendants())do if object:IsA("GuiObject")then object.ZIndex=compact and 31 or 2 end end

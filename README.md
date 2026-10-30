@@ -17,6 +17,7 @@ Black interface with a game-category sidebar, instant game/script search, and Ai
 - Universal: PC-only soft camera lock with shift-lock compensation and a red target highlight.
 - Ink Game: auto-dodge using the available native dash.
 - Funky Friday: autoplay with taps, holds, and chords.
+- Funky Duels: native autoplay with taps, holds, chords, and hurt-note filtering. Requires debug.getupvalues, debug.info, and module access; mobile gameplay verification is pending.
 - rosu!mania: autoplay with native lane presses and hold releases.
 
 All scripts start OFF. Individual script buttons and hotkeys are removed in the hub build. Use the hub switches to control features, Right Shift to hide/show the hub, or AS to reopen it. Drag the title bar to move the window.
