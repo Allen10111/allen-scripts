@@ -28,7 +28,19 @@ local function call(fn,...)
 end
 function state:ReleaseLane(lane)
     local h=self.Held[lane]
-    if h then self.Held[lane]=nil;call(native.KeyLift,h.Input,false) end
+    if h then
+        self.Held[lane]=nil
+        local lift=up(native.KeyLift)
+        if lift[1] and lift[6]==h.Side then
+            call(native.KeyLift,h.Input,false)
+        else
+            -- KeyLift ignores input after a song ends; clear only our owned key.
+            lift[3][h.Input.KeyCode]=nil
+            lift[4][lane]=false
+            local skin=lift[5][h.Side] and lift[5][h.Side][lane]
+            if skin then call(skin.Release,skin) end
+        end
+    end
 end
 function state:Release()
     for lane=1,4 do local ok,err=pcall(self.ReleaseLane,self,lane);if not ok then self.LastError=tostring(err) end end
