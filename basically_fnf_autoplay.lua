@@ -89,8 +89,8 @@ function state:Step(dt)
             if nextNote and nextNote.Parent and (not note or not note.Parent or math.abs(nextNote.Position.Y.Scale)<math.abs(note.Position.Y.Scale)) then note=nextNote end
             if note and note.Parent and not self.Seen[note] then
                 local timeLeft=note.Position.Y.Scale*direction/(5.5*speed)
-                -- Sick is 16.5–43.5 ms here; aim at its 30 ms early midpoint.
-                if timeLeft<=0.030+math.min(dt*0.5,0.010) and timeLeft>=-0.11 then
+                -- Render-step midpoint targeting; late notes outside the native window are skipped.
+                if timeLeft<=math.min(dt*0.5,0.012) and timeLeft>=-0.11 then
                     if self.Held[lane] and not data.holding then self:ReleaseLane(lane) end
                     if not self.Held[lane] then
                         local key=keys and Enum.KeyCode[keys[lane]]
