@@ -1,5 +1,5 @@
--- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC + Mobile)
--- Tap the blank button on mobile; use the button or F1 on PC. Starts OFF.
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC)
+-- F1 toggles the system. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
 --
@@ -30,7 +30,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
--- Native dash logic works independently of keyboard hardware.
+-- Hub switch replaces the PC keyboard gate on touch devices.
 assert(type(getconnections)=="function" and debug and type(debug.getupvalues)=="function",
     "Auto Dodge requires getconnections and debug.getupvalues; this executor is missing those APIs")
 
@@ -102,7 +102,7 @@ local ZERO = Vector3.zero
 local DIRECTION_SAMPLE_TIMES = { 0.04, 0.08, 0.14, 0.22, 0.34, 0.5 }
 
 local State = {
-    Version = 8.05,
+    Version = 8.04,
     MinimumActionPlanningBudget = 0.0018,
     PlanningReserveUses = 0,
     LocalRestCorrections = 0,
@@ -1081,19 +1081,10 @@ end
 
 local StatusGui={Enabled=false,Destroy=function()end}
 local ToggleButton={Parent=true}
-local function updateStatus(force)
-    if State.Destroyed or not ToggleButton.Parent then
-        return
-    end
-    local now = os.clock()
-    if not force and now < State.NextStatusAt then
-        return
-    end
-    State.NextStatusAt = now + 0.2
-    ToggleButton.BackgroundColor3 = State.Enabled
-        and Color3.fromRGB(36, 165, 91)
-        or Color3.fromRGB(164, 55, 62)
-    StatusGui.Enabled = false
+local function updateStatus(force) end
+function State:GetSnapshot()
+    return {Enabled=self.Enabled,Status=self.Enabled and (self.LastBlockReason or "Watching attacks") or "Off",
+        Errors=self.ErrorCount or 0}
 end
 
 local function reportError(context, message)
@@ -1631,18 +1622,6 @@ local function bindExact(id, base, fields)
     EXACT_PROFILES[tostring(id)] = profile
     return profile
 end
-
--- Exact identity, conservative onset envelope: the replicated push can
--- already have applied stun before the generic 140 ms area windup. This
--- deliberately covers phase zero; it is not a verified server hitbox.
-bindExact("104041807075625", PROFILE_AREA, {
-    Name = "Push 1", ActiveStart = 0, ActiveEnd = 0.48,
-    AnimationLength = 1,
-})
-bindExact("103318207627541", PROFILE_AREA, {
-    Name = "Push 2", ActiveStart = 0, ActiveEnd = 0.48,
-    AnimationLength = 1,
-})
 
 -- Timelines are expressed in animation-time seconds. The live animation
 -- lengths were measured in this universe, and every damaging non-gun weapon
@@ -11482,84 +11461,6 @@ local function disconnectWatcher(character)
     end
 end
 
--- Recovery invalidates predictions built from ragdoll physics, not native cooldowns.
-function State:ObserveLocalRecovery(character)
-    if self.RecoveryCharacter~=character then
-        self.RecoveryCharacter=character
-        self.RecoveryBlocked=false
-    end
-    if not character then return false end
-    local blocked=character:FindFirstChild("Ragdoll")~=nil
-        or character:FindFirstChild("DisableDash")~=nil
-        or self:NativeDashStunReason(character)~=nil
-    if blocked and not self.RecoveryBlocked then
-        local recent={}
-        for _,threat in ipairs(self.Pending)do
-            if #recent>=4 then break end
-            recent[#recent+1]={Id=threat.AnimationId or "",Name=threat.Profile.Name,
-                Phase=threat.LogicalElapsed or 0,Contact=threat.ContactIn,
-                Gate=threat.LastEvaluationReason or "Not evaluated",
-                Requests=threat.RequestCount or 0}
-        end
-        pushReplay("local_control_lost",os.clock(),{
-            Reason=character:FindFirstChild("Ragdoll") and "Ragdoll"
-                or character:FindFirstChild("DisableDash") and "DisableDash"
-                or self:NativeDashStunReason(character),
-            Decision=self.LastBlockReason or "None",Threats=recent})
-    end
-    local recovered=self.RecoveryBlocked and not blocked
-    self.RecoveryBlocked=blocked
-    if not recovered then return false end
-    self.RecoveryRefreshes=(self.RecoveryRefreshes or 0)+1
-    self:ClearDashControllerCache()
-    self.LocalMotion=nil
-    self.DodgePlan=nil
-    self.NextMpcAt=0
-    self.NextAnimationSweepAt=0
-    self.RecoverySweepPending=true
-    table.clear(self.TerrainResultCache)
-    for _,threat in ipairs(self.Pending)do
-        threat.TerrainBlockedUntil=nil
-        threat.PreviousRelative=nil
-        threat.PreviousRelativeAt=nil
-    end
-    pushReplay("local_recovered",os.clock(),{Reason="Native recovery markers cleared"})
-    return true
-end
-
--- AnimationPlayed stays primary. A bounded sweep catches a missed callback
--- and reconsiders still-active attacks immediately after local recovery.
-function State:SweepNearbyAttackTracks(now, localRoot, generation)
-    if now<(self.NextAnimationSweepAt or 0) then return end
-    self.NextAnimationSweepAt=now+1/30
-    local force=self.RecoverySweepPending==true
-    self.RecoverySweepPending=false
-    local existing={}
-    for _,threat in ipairs(self.Pending)do if threat.Track then existing[threat.Track]=true end end
-    local nearest={}
-    for _,watcher in pairs(self.Watchers)do
-        if watcher.Root and watcher.Animator then
-            local distance=(watcher.Root.Position-localRoot.Position).Magnitude
-            if distance<=60 then nearest[#nearest+1]={Watcher=watcher,Distance=distance}end
-        end
-    end
-    table.sort(nearest,function(a,b)return a.Distance<b.Distance end)
-    for index=1,math.min(#nearest,8)do
-        local watcher=nearest[index].Watcher
-        local ok,tracks=pcall(watcher.Animator.GetPlayingAnimationTracks,watcher.Animator)
-        if ok then
-            for i=1,math.min(#tracks,24)do
-                local track=tracks[i]
-                if not existing[track] and (force or not self.SeenTracks[track])then
-                    if force then self.SeenTracks[track]=nil end
-                    watcher.QueueAttack(watcher.Character,track,generation)
-                    self.AnimationSweepCandidates=(self.AnimationSweepCandidates or 0)+1
-                end
-            end
-        end
-    end
-end
-
 local function sampleCharacters(now, localRoot)
     local localPosition = localRoot.Position
     for _, watcher in pairs(State.Watchers) do
@@ -11609,7 +11510,6 @@ local function processFrame(deltaTime, generation)
         end
     end
     local localCharacter, localHumanoid, localRoot = getLocalCharacter()
-    State:ObserveLocalRecovery(localCharacter)
     -- Track power transitions even with no active threat.  This resets the
     -- fallback RecentDash baseline on unequip/re-equip, so a normal dash from
     -- another power cannot be miscounted as a Phantom charge.
@@ -11618,7 +11518,6 @@ local function processFrame(deltaTime, generation)
     if localCharacter and localRoot then
         State.LocalMotion = sampleMotion(State.LocalMotion, localRoot, now)
         sampleCharacters(now, localRoot)
-        State:SweepNearbyAttackTracks(now, localRoot, generation)
     else
         State.LocalMotion = nil
     end
@@ -11685,9 +11584,6 @@ local function processFrame(deltaTime, generation)
                         localRoot,
                         State.LocalMotion
                     )
-                    threat.LastEvaluationReason = ok and (valid
-                        and (threat.ContactIn and "Collision predicted" or "No collision predicted")
-                        or reason) or "Evaluation error"
                     evaluatedThreats += 1
                     if not ok then
                         threat.ErrorCount = (threat.ErrorCount or 0) + 1
@@ -11846,14 +11742,13 @@ local function evaluateImmediately(threat, now, allowDodge)
             watcher.Motion = sampleMotion(watcher.Motion, watcher.Root, now)
         end
     end
-    local valid, reason = evaluateThreat(
+    local valid = evaluateThreat(
         threat,
         now,
         localCharacter,
         localRoot,
         State.LocalMotion
     )
-    threat.LastEvaluationReason = valid and (threat.ContactIn and "Collision predicted" or "No collision predicted") or reason
     if not valid then
         threat.ContactIn = nil
         threat.Emergency = false
@@ -12266,13 +12161,6 @@ queueAttack = function(attackerCharacter, track, generation, forceDashRetry)
     evaluateImmediately(threat, now, false)
     dodgeMostUrgentNow(now)
     updateStatus(false)
-end
-
-function State:GetSnapshot()
-    local reason=self.LastBlockReason
-    local status=not self.Enabled and "Off" or reason and reason~="None" and reason or "Watching attacks"
-    return {Enabled=self.Enabled,Status=status,RecoveryRefreshes=self.RecoveryRefreshes or 0,
-        AnimationSweepCandidates=self.AnimationSweepCandidates or 0,Errors=self.ErrorCount or 0}
 end
 
 function State:RunSelfTest()
@@ -13290,13 +13178,6 @@ function State:RunSelfTest()
     end
     local cancelledProbe = { Track = { IsPlaying = false }, StoppedPhase = 0.01,
         DashAttack = true, DashWalkBridgeUntil = math.huge }
-    local pushOne=EXACT_PROFILES["104041807075625"]
-    local pushTwo=EXACT_PROFILES["103318207627541"]
-    result.PushOnsetCovered = pushOne and pushTwo
-        and pushOne.ActiveStart == 0 and pushTwo.ActiveStart == 0
-        and pushOne.ActiveEnd >= 0.48 and pushTwo.ActiveEnd >= 0.48
-    result.PushShortTrackNotFalseCancelled = not self:IsCancelledAttack(
-        cancelledProbe,pushOne.ActiveStart)
     result.DashCannotReviveCancelledWindup = self:IsCancelledAttack(cancelledProbe, 0.3)
     cancelledProbe.StoppedPhase = 0.35
     result.ActiveAttackSurvivesTrackStop = not self:IsCancelledAttack(cancelledProbe, 0.3)
@@ -13471,10 +13352,6 @@ local function stopActiveWork()
     State.FlingBrakeUntil = 0
     State.SeenTracks = setmetatable({}, { __mode = "k" })
     State.LocalMotion = nil
-    State.RecoveryCharacter = nil
-    State.RecoveryBlocked = false
-    State.RecoverySweepPending = false
-    State.NextAnimationSweepAt = 0
     State.AttemptPending = nil
     State.DodgePlan = nil
     State.NextMpcAt = 0
