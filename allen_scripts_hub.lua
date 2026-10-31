@@ -15296,9 +15296,10 @@ local launcher=rounded(create("TextButton",{Name="OpenHub",Text="AS",Font=Enum.F
 create("UIStroke",{Color=C.Line,Thickness=1},launcher)
 local divider=create("Frame",{BackgroundColor3=C.Line,BorderSizePixel=0,Position=UDim2.fromOffset(20,79),Size=UDim2.fromOffset(680,1)},window)
 local sidebar=rounded(create("ScrollingFrame",{Name="Categories",BackgroundColor3=Color3.fromRGB(11,11,13),BorderSizePixel=0,
-    Position=UDim2.fromOffset(20,98),Size=UDim2.fromOffset(154,452),CanvasSize=UDim2.fromOffset(0,452),ScrollBarThickness=3},window),12)
+    Position=UDim2.fromOffset(20,98),Size=UDim2.fromOffset(154,452),CanvasSize=UDim2.fromOffset(0,452),ScrollBarThickness=5,
+    Active=true,ScrollingEnabled=true,ScrollingDirection=Enum.ScrollingDirection.Y,ScrollBarImageColor3=C.Accent},window),12)
 local gamesLabel=text(sidebar,"GAMES",14,16,120,18,10,C.Muted)
-local libraryCount=text(sidebar,"4 scripts available",14,416,126,18,10,C.Muted)
+local libraryCount=text(sidebar,tostring(#features).." scripts available",14,416,126,18,10,C.Muted)
 local categoryButtons,sectionButtons={},{}
 local selectedGame,selectedSection="All","All"
 local search=rounded(create("TextBox",{Name="Search",PlaceholderText="Search games or scripts…",Text="",ClearTextOnFocus=false,
@@ -15312,7 +15313,8 @@ local currentOnly=false
 local results=text(window,"",196,193,498,17,10,C.Muted)
 local scroll=create("ScrollingFrame",{Name="Features",Position=UDim2.fromOffset(194,221),Size=UDim2.fromOffset(506,282),
     BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=C.Accent,
-    CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y},window)
+    CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,Active=true,ScrollingEnabled=true,
+    ScrollingDirection=Enum.ScrollingDirection.Y},window)
 create("UIListLayout",{Padding=UDim.new(0,10),SortOrder=Enum.SortOrder.LayoutOrder},scroll)
 local empty=text(window,"No scripts found\nTry Ink Game, Funky Friday, rosu or Universal.",214,299,466,70,13,C.Muted)
 empty.TextXAlignment=Enum.TextXAlignment.Center;empty.TextWrapped=true
@@ -15465,13 +15467,13 @@ local function applyLayout(size,touch)
         for i,name in ipairs({"All","Aim","Movement","Rhythm"})do place(sectionButtons[name],(i-1)*128,0,122,28)end
         place(results,196,193,498,17);results.TextSize=10
         place(footer,196,520,498,32);footer.TextSize=10
-        place(sidebar,20,98,154,452);sidebar.CanvasSize=UDim2.fromOffset(0,452);sidebar.ZIndex=1
+        place(sidebar,20,98,154,452);sidebar.CanvasSize=UDim2.fromOffset(0,130+#gameCategories*43);sidebar.ZIndex=1
         place(gamesLabel,14,16,120,18);gamesLabel.TextSize=10
         for i,name in ipairs(gameCategories)do
             place(categoryButtons[name],10,47+(i-1)*43,134,34);categoryButtons[name].TextSize=12
         end
         place(currentGame,10,59+#gameCategories*43,134,32);currentGame.TextSize=12
-        place(libraryCount,14,416,126,18);libraryCount.Visible=true
+        place(libraryCount,14,104+#gameCategories*43,126,18);libraryCount.Visible=true
     end
     for _,object in ipairs(sidebar:GetDescendants())do if object:IsA("GuiObject")then object.ZIndex=compact and 31 or 2 end end
     local tight=compact and h<300
