@@ -14,6 +14,7 @@ Black interface with a game-category sidebar, instant game/script search, and Ai
 
 ## Included
 
+- Basically FNF: Remix: native local-lane autoplay for taps, holds, and chords, with upscroll/downscroll and current keybinding support. Requires module access, getfenv, and debug.getupvalues. Mobile executor gameplay is unverified.
 - Universal: PC-only soft camera lock with shift-lock compensation and a red target highlight.
 - Ink Game: auto-dodge using the available native dash.
 - Shindo Life: automatic power guard using the native block request, short holds, caster-facing, manual input ownership, and dodge fallback if guarding fails, breaks, or damage gets through. Detected projectiles, jutsu casts, and modeled power hazards are guard candidates; melee dash combos keep using evasions. Guard-break/unguardable attacks are not guaranteed blocked. Native local movement dash triggered by nearby replicated combat/cast signals, incoming physical carriers, and supported area-power events. Long beams/waves are covered along their full axis. Actual touch carriers in ClientEffects are included; cosmetic effects alone are ignored. Supplementary visual-envelope profiles cover Grand Fireball, Almighty Push variants, Earth AoE, Water Pillar Dragon, and Senko teleport/flash cues. These are defensive approximations, not verified server damage volumes. Checks full dash paths against tracked attacks, projectiles, and occupied landing zones using continuous collision tests and two dash-speed estimates. Wall walking is unsupported. Cast ranges are heuristics, not verified server hitboxes. No guarantee of avoiding every attack; cooldown, stun, latency, and unobserved attacks still apply. Requires getconnections, debug.info, and thread identity APIs. Does not grant invulnerability. Mobile gameplay unverified.
@@ -35,3 +36,4 @@ The compact mobile window is capped at 430 by 430 pixels and adapts to touch scr
 ## Auto Dodge engine
 
 `ink_auto_dodge.lua` is the button-free native dodge engine for PC and mobile. It starts OFF and is controlled by the hub switch. It creates no standalone GUI or hotkeys. Requires a supported executor and an available native dash.
+
