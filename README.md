@@ -16,6 +16,7 @@ Black interface with a game-category sidebar, instant game/script search, and Ai
 
 - Universal: PC-only soft camera lock with shift-lock compensation and a red target highlight.
 - Ink Game: auto-dodge using the available native dash.
+- Shindo Life: native local movement dash triggered by nearby replicated combat/cast signals and incoming owned/touch projectiles. Uses conservative ground route checks; wall walking is unsupported. Cast ranges are heuristics, not verified server hitboxes. No guarantee of avoiding every attack; cooldown, stun, latency, and unobserved attacks still apply. Requires getconnections, debug.info, and thread identity APIs. Does not grant invulnerability. Mobile gameplay unverified.
 - Funky Friday: autoplay with taps, holds, and chords.
 - Funky Duels: native autoplay with taps, holds, chords, and hurt-note filtering. Requires debug.getupvalues, debug.info, and module access; mobile gameplay verification is pending.
 - rosu!mania: autoplay with native lane presses and hold releases.
