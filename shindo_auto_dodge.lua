@@ -9,7 +9,7 @@ local env=getgenv()
 if env.__SHINDO_AUTO_DODGE then env.__SHINDO_AUTO_DODGE:Destroy() end
 local S={Enabled=false,HubOnly=true,Destroyed=false,Connections={},Watchers={},Projectiles={},
     Threats={},Replay={},Requests=0,Acknowledged=0,Errors=0,Detected=0,NextRequest=0,
-    Status="Off",Generation=0,NextScan=0,NextTick=0,LastHit="None",Version=1}
+    Status="Off",Generation=0,NextScan=0,NextTick=0,LastHit="None",Version=2}
 env.__SHINDO_AUTO_DODGE=S
 local ZERO=Vector3.zero
 local identityGet=getthreadidentity or getidentity
@@ -71,14 +71,56 @@ local function addThreat(w,kind)
     local _,_,root=localParts();local r=w.Root
     if not root or not r or not r.Parent then return end
     local distance=(root.Position-r.Position).Magnitude
-    if distance>(kind=="Jutsu" and 36 or 24)then return end
+    -- Retain distant melee windups: the dash can replicate after the punch.
+    -- Admission does not trigger a dodge; Gather still requires collision.
+    if distance>(kind=="Jutsu" and 36 or 96)then return end
     -- A cast signals possible danger, not a verified target or server hitbox.
     -- Only nearby forward-facing casts are considered without a projectile.
     if distance>5 and flat(r.CFrame.LookVector):Dot(flat(root.Position-r.Position))<0.25 then return end
-    S.Threats[w.Character]={Root=r,Kind=kind,Until=os.clock()+(kind=="Jutsu" and .65 or .4),
+    S.Threats[w.Character]={Root=r,Kind=kind,Until=os.clock()+(kind=="Jutsu" and .65 or .55),
         Range=kind=="Jutsu" and 24 or 12,Created=os.clock()}
     S.Detected+=1;log("attack",{Name=w.Character.Name,Source=kind,Distance=distance})
     S.NextTick=0
+end
+local DASH_ANIMATIONS={
+    ["4830732942"]="right",["4830735289"]="left",
+    ["9102219647"]="back",["9102202719"]="front",
+    ["13188341428"]="right",["13188333575"]="left",
+    ["13188336212"]="back",["13188338883"]="front",
+}
+function S:ObserveEnemyDash(w,direction)
+    local now=os.clock();w.DashUntil=now+.55
+    if direction then
+        local cf=w.Root.CFrame
+        local v=direction=="right" and cf.RightVector or direction=="left" and -cf.RightVector
+            or direction=="back" and -cf.LookVector or cf.LookVector
+        w.DashVelocity=flat(v)*60;w.DashBridgeUntil=now+.12
+    end
+    local threat=self.Threats[w.Character]
+    log("enemy_dash",{Name=w.Character.Name,Direction=direction or "Replicated slide",AttackPending=threat~=nil})
+    self.NextTick=0
+end
+function S:EnemyVelocity(w,now)
+    local position=w.Root.Position
+    local velocity=w.Root.AssemblyLinearVelocity
+    local dt=w.MotionAt and now-w.MotionAt or 0
+    if dt>=.008 and dt<=.25 and w.MotionPosition then
+        local displacement=position-w.MotionPosition
+        local measured=displacement/dt
+        if displacement.Magnitude<=45 and measured.Magnitude<=240
+            and measured.Magnitude>math.max(24,velocity.Magnitude*1.5)then velocity=measured end
+    end
+    w.MotionAt=now;w.MotionPosition=position
+    if velocity.Magnitude<12 and now<(w.DashBridgeUntil or 0) and w.DashVelocity then
+        velocity=w.DashVelocity
+    end
+    return velocity
+end
+function S:AttackContact(relative,velocity,forward,range,dashActive)
+    local gap,eta=self:ClosestApproach(relative,velocity,dashActive and .35 or .25,range+2)
+    local closing=relative.Magnitude>.01 and -relative.Unit:Dot(velocity) or 0
+    local dashIncoming=dashActive and closing>=24
+    return gap<=0 and (relative.Magnitude<5 or forward>.15),eta,dashIncoming
 end
 function S:Watch(character)
     if character==LP.Character or self.Watchers[character]then return end
@@ -95,6 +137,23 @@ function S:Watch(character)
                 if new==true or type(new)=="number" and new>0 then addThreat(w,spec[2])end
             end)
         end
+    end
+    for _,name in ipairs({"slide","slide2"})do
+        local v=combat:FindFirstChild(name)
+        if v and v:IsA("BoolValue")then
+            w.Connections[#w.Connections+1]=v.Changed:Connect(function(on)
+                if on then self:ObserveEnemyDash(w)end
+            end)
+        end
+    end
+    local animator=h:FindFirstChildOfClass("Animator")
+    if animator then
+        w.Connections[#w.Connections+1]=animator.AnimationPlayed:Connect(function(track)
+            local animation=track.Animation
+            local id=animation and animation.AnimationId:match("%d+")
+            local direction=id and DASH_ANIMATIONS[id]
+            if direction then self:ObserveEnemyDash(w,direction)end
+        end)
     end
 end
 function S:Scan(now,root)
@@ -134,16 +193,27 @@ function S:Scan(now,root)
 end
 function S:Gather(now,root)
     local dangers={}
+    for _,w in pairs(self.Watchers)do
+        if w.Root.Parent then w.Velocity=self:EnemyVelocity(w,now)end
+    end
     for c,t in pairs(self.Threats)do
         if now>t.Until or not t.Root.Parent then self.Threats[c]=nil
         else
             local relative=t.Root.Position-root.Position
-            local velocity=t.Root.AssemblyLinearVelocity-root.AssemblyLinearVelocity
-            local gap,eta=self:ClosestApproach(relative,velocity,.25,t.Range+2)
+            local w=self.Watchers[c]
+            local attackerVelocity=w and w.Velocity or t.Root.AssemblyLinearVelocity
+            local velocity=attackerVelocity-root.AssemblyLinearVelocity
+            local dashActive=(w and now<(w.DashUntil or 0)) or attackerVelocity.Magnitude>=35
             local forward=flat(t.Root.CFrame.LookVector):Dot(flat(-relative))
-            if gap<=0 and (relative.Magnitude<5 or forward>.15)then
-                dangers[#dangers+1]={Position=t.Root.Position,Velocity=t.Root.AssemblyLinearVelocity,
-                    Radius=t.Range,Source=t.Kind,ETA=eta}
+            local hit,eta,incoming=self:AttackContact(relative,velocity,forward,t.Range,dashActive)
+            if hit then
+                local source=t.Kind=="Melee" and incoming and "Dash + melee" or t.Kind
+                if source=="Dash + melee" and not t.DashLogged then
+                    t.DashLogged=true
+                    log("dash_attack",{Name=c.Name,Distance=relative.Magnitude,ETA=eta,Speed=attackerVelocity.Magnitude})
+                end
+                dangers[#dangers+1]={Position=t.Root.Position,Velocity=attackerVelocity,
+                    Radius=t.Range,Source=source,ETA=eta}
             end
         end
     end
