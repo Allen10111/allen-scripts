@@ -8,11 +8,12 @@ if game.GameId ~= 1511883870 then return end
 local Players=game:GetService("Players")
 local Run=game:GetService("RunService")
 local LP=Players.LocalPlayer
+local UIS=game:GetService("UserInputService")
 local env=getgenv()
 if env.__SHINDO_AUTO_DODGE then env.__SHINDO_AUTO_DODGE:Destroy() end
 local S={Enabled=false,HubOnly=true,Destroyed=false,Connections={},Watchers={},Projectiles={},Powers={},
     Threats={},Replay={},Requests=0,Acknowledged=0,Errors=0,Detected=0,NextRequest=0,
-    Status="Off",Generation=0,NextScan=0,NextTick=0,LastHit="None",Version=5}
+    Status="Off",Generation=0,NextScan=0,NextTick=0,LastHit="None",Version=7}
 env.__SHINDO_AUTO_DODGE=S
 local ZERO=Vector3.zero
 local identityGet=getthreadidentity or getidentity
@@ -174,6 +175,7 @@ function S:ObservePower(caster,payload,name)
     local count=0;for _ in pairs(self.Powers)do count+=1 end
     if count>=16 then self.PowerOverflowUntil=os.clock()+1;return false end
     local key={}
+    for _,zone in ipairs(zones)do zone.CasterRoot=casterRoot end
     self.Powers[key]={Until=os.clock()+lifetime,Zones=zones}
     self.PowerEvents=(self.PowerEvents or 0)+1
     log("power",{Name=name,Caster=caster.Name,Zones=#zones,Evidence="Client effect envelope"})
@@ -536,6 +538,7 @@ function S:Request(direction,source)
     end
     if not self.NativeCallback then self.Status="Waiting for native movement callback";return false end
     if self.NativeBusy then self.Status="Native dash active";return false end
+    self:ReleasePowerGuard("Dodge takes priority")
     self.NextRequest=now+1;self.Requests+=1;self.Status="Dash requested: "..source
     self.PendingAck={Root=r,Combat=combat,Started=now,Position=r.Position,Direction=direction,Source=source}
     local callback=self.NativeCallback
@@ -566,15 +569,104 @@ function S:Request(direction,source)
     log("request",{Source=source,Direction=tostring(direction)})
     return true
 end
+function S:IsGuardCandidate(threat)
+    return type(threat.Source)=="string" and (threat.Source:match("^Power: ")~=nil
+        or threat.Source=="Jutsu" or threat.Source=="Projectile")
+end
+function S:ReleasePowerGuard(reason)
+    local guard=self.PowerGuard
+    if not guard then return end
+    self.PowerGuard=nil
+    if guard.Humanoid and guard.Humanoid.Parent and guard.Humanoid.AutoRotate==false then
+        guard.Humanoid.AutoRotate=guard.AutoRotate
+    end
+    -- A real input begun during our hold transfers ownership to the player.
+    if not guard.ManualTakeover and not self.ManualGuardHeld and guard.Remote.Parent then
+        pcall(guard.Remote.FireServer,guard.Remote,"mouse2",false)
+        self.GuardReleasePendingUntil=os.clock()+.25
+    end
+    log("guard_release",{Reason=reason})
+end
+function S:UpdatePowerGuard(dangers,now,character,humanoid,root,combat)
+    local senko
+    for _,threat in ipairs(dangers)do if self:IsGuardCandidate(threat)then senko=threat;break end end
+    local guard=self.PowerGuard
+    if guard and (guard.Character~=character or guard.ManualTakeover)then
+        self:ReleasePowerGuard(guard.ManualTakeover and "Manual takeover" or "Character changed")
+        guard=nil
+    end
+    local restricted=value(combat,"ragdoll",false) or value(combat,"disable",false)
+        or value(combat,"disablekeys",false) or value(combat,"bind",false)
+        or value(combat,"grip",false) or value(combat,"plrgrip",false) or value(combat,"wallwalk",false)
+    if guard and (restricted or now>=guard.Started+.85)then
+        self:ReleasePowerGuard(restricted and "Native movement restriction" or "Hold limit")
+        self.NextPowerGuard=now+.5
+        return false
+    end
+    if not senko then
+        if guard and now>=guard.HoldUntil then self:ReleasePowerGuard("Power threat cleared")end
+        return false
+    end
+    if restricted then return false end
+    -- Preserve ordinary blocking without claiming it or changing facing.
+    if not guard and value(combat,"deflect",false) and now>=(self.GuardReleasePendingUntil or 0)then
+        self.Status="Manual block active: power"
+        return true
+    end
+    if self.ManualGuardHeld then return false end
+    if not guard then
+        if now<(self.NextPowerGuard or 0) or self.NativeBusy then return false end
+        local remote=combat and combat:FindFirstChild("update")
+        if not remote or not remote:IsA("RemoteEvent")then return false end
+        guard={Character=character,Humanoid=humanoid,AutoRotate=humanoid.AutoRotate,
+            Remote=remote,Started=now,HoldUntil=now+.22,AckWait=.18}
+        local ok,ping=pcall(LP.GetNetworkPing,LP)
+        if ok and type(ping)=="number" then guard.AckWait=math.clamp(ping*2+.06,.12,.35)end
+        self.PowerGuard=guard
+        self.GuardRequests=(self.GuardRequests or 0)+1
+        humanoid.AutoRotate=false
+        remote:FireServer("mouse2",true)
+        log("guard_request",{Source=senko.Source})
+    end
+    guard.HoldUntil=math.min(guard.Started+.85,math.max(guard.HoldUntil,now+.12))
+    local caster=senko.CasterRoot
+    local target=caster and caster.Parent and caster.Position or senko.Position
+    local horizontal=Vector3.new(target.X-root.Position.X,0,target.Z-root.Position.Z)
+    if horizontal.Magnitude>.25 then root.CFrame=CFrame.lookAt(root.Position,root.Position+horizontal)end
+    local acknowledged=value(combat,"deflect",false)
+    if acknowledged and not guard.Acknowledged then
+        guard.Acknowledged=true
+        self.GuardAcknowledged=(self.GuardAcknowledged or 0)+1
+        log("guard_ack",{Source=senko.Source,DelayMs=(now-guard.Started)*1000})
+    elseif not acknowledged and (guard.Acknowledged or now-guard.Started>guard.AckWait)then
+        self:ReleasePowerGuard(guard.Acknowledged and "Guard broken or released" or "Guard not acknowledged")
+        self.NextPowerGuard=now+.6
+        self.Status="Power guard unavailable: trying dodge"
+        return false
+    end
+    self.Status=acknowledged and "Blocking power" or "Requesting power block"
+    return true
+end
+function S:ObserveGuardDamage(now)
+    if not self.PowerGuard then return false end
+    log("guard_damage",{Acknowledged=self.PowerGuard.Acknowledged==true})
+    self:ReleasePowerGuard("Damage passed through guard")
+    self.NextPowerGuard=now+.7
+    return true
+end
 function S:Tick()
     local now=os.clock();if now<self.NextTick then return end;self.NextTick=now+1/30
     local c,h,r,combat=localParts()
-    if not c or not h or not r or h.Health<=0 then self.Status="Waiting for character";return end
+    if not c or not h or not r or h.Health<=0 then
+        self:ReleasePowerGuard("Character unavailable")
+        self.Status="Waiting for character";return
+    end
     local health=value(c,"fakehealth",h.Health)
     if self.LastCharacter~=c then
         self.LastCharacter=c;self.LastHealth=health;self.NextScan=0;self.PendingAck=nil
     elseif health<self.LastHealth then
         self.LastHit=self.Status;log("health_loss",{Amount=self.LastHealth-health,Decision=self.Status})
+        self:ObserveGuardDamage(now)
     end
     self.LastHealth=health
     if now>=self.NextScan then self:Scan(now,r)end
@@ -598,6 +690,7 @@ function S:Tick()
     end
     local dangers=self:Gather(now,r)
     self.ActiveThreats=#dangers
+    if self:UpdatePowerGuard(dangers,now,c,h,r,combat)then return end
     if #dangers==0 then if now>=self.NextRequest then self.Status="Watching attacks"end;return end
     local direction=self:Plan(r,h,dangers,c)
     if not direction then self.Status=self.RouteReason or "No verified ground route";return end
@@ -607,13 +700,15 @@ function S:GetSnapshot()
     return {Enabled=self.Enabled,Status=self.Status,Requests=self.Requests,Acknowledged=self.Acknowledged,
         Errors=self.Errors,Threats=self.ActiveThreats or 0,RouteThreats=self.RouteThreatCount or 0,
         RoutesChecked=self.RouteChecked or 0,RouteClearance=self.LastRouteClearance,
-        RouteReason=self.RouteReason,PowerEvents=self.PowerEvents or 0}
+        RouteReason=self.RouteReason,PowerEvents=self.PowerEvents or 0,
+        GuardRequests=self.GuardRequests or 0,GuardAcknowledged=self.GuardAcknowledged or 0}
 end
 function S:SetEnabled(on)
     if self.Destroyed then return end
     on=on==true;if self.Enabled==on then return end
     self.Enabled=on;self.Generation+=1
     if not on then
+        self:ReleasePowerGuard("Feature OFF")
         disconnect(self.Connections)
         for _,w in pairs(self.Watchers)do disconnect(w.Connections)end
         disconnect(self.HazardConnections or {});self.HazardConnections={};self.HazardRoots={};self.EffectsFolder=nil
@@ -621,10 +716,51 @@ function S:SetEnabled(on)
         self.ReleaseRemote=nil;self.ProjectileFolder=nil;self.PendingAck=nil;self.NativeCallback=nil;self.NativeCharacter=nil
         table.clear(self.Watchers);table.clear(self.Projectiles);table.clear(self.Threats);table.clear(self.Powers)
         self.PowerOverflowUntil=nil
+        self.GuardReleasePendingUntil=0
+        self.ManualGuardHeld=false
+        self.ManualGuardInputs={}
         self.Status="Off";return
     end
     self.Status="Watching attacks";self.NextScan=0;self.NextTick=0
-    self.Connections[1]=Run.Heartbeat:Connect(function()
+    local function guardInput(input)
+        return input.UserInputType==Enum.UserInputType.MouseButton2 or input.KeyCode==Enum.KeyCode.ButtonL2
+    end
+    self.ManualGuardHeld=UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    self.ManualGuardInputs={}
+    local function manualStart(input)
+        self.ManualGuardInputs[input]=true
+        self.ManualGuardHeld=true
+        if self.PowerGuard then self.PowerGuard.ManualTakeover=true end
+    end
+    local function manualEnd(input)
+        self.ManualGuardInputs[input]=nil
+        self.ManualGuardHeld=next(self.ManualGuardInputs)~=nil
+            or UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    end
+    self.Connections[#self.Connections+1]=UIS.InputBegan:Connect(function(input)
+        if guardInput(input)then manualStart(input)end
+    end)
+    self.Connections[#self.Connections+1]=UIS.InputEnded:Connect(function(input)
+        if guardInput(input) or self.ManualGuardInputs[input]then manualEnd(input)end
+    end)
+    local main=LP.PlayerGui:FindFirstChild("Main")
+    local ingame=main and main:FindFirstChild("ingame")
+    local keys=ingame and ingame:FindFirstChild("mobilekeys")
+    local block=keys and keys:FindFirstChild("BLOCK")
+    if block and block:IsA("GuiButton")then
+        self.Connections[#self.Connections+1]=block.InputBegan:Connect(function(input)
+            if input.UserInputType==Enum.UserInputType.Touch then manualStart(input)end
+        end)
+        self.Connections[#self.Connections+1]=block.InputEnded:Connect(function(input)
+            if input.UserInputType==Enum.UserInputType.Touch then manualEnd(input)end
+        end)
+    end
+    self.Connections[#self.Connections+1]=UIS.WindowFocusReleased:Connect(function()
+        self.ManualGuardHeld=false
+        table.clear(self.ManualGuardInputs)
+        self:ReleasePowerGuard("Window focus lost")
+    end)
+    self.Connections[#self.Connections+1]=Run.Heartbeat:Connect(function()
         local ok,err=pcall(self.Tick,self)
         if not ok then
             self.Errors+=1;warn("[Shindo Auto Dodge] "..tostring(err))
@@ -14930,7 +15066,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge",Subtitle="Native movement dash · combat and projectiles",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
+    {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
     {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="PC only · C to lock/unlock · red highlight",Badge="PC only",PCOnly=true,Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="ff",Section="Funky Friday",Category="Rhythm",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
