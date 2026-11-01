@@ -1,4 +1,5 @@
 -- Allen Scripts: Blade Ball native parry controller, hub only.
+error("Auto Parry disabled after a reported Roblox crash; do not run this experimental build")
 assert(game.GameId==4777817887,"Open Blade Ball")
 assert(type(getconnections)=="function"and debug and type(debug.getupvalues)=="function","Executor needs getconnections and debug.getupvalues")
 local LP=game:GetService("Players").LocalPlayer
