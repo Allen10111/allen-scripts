@@ -14,6 +14,7 @@ Black interface with a game-category sidebar, instant game/script search, and Ai
 
 ## Included
 
+- Blade Ball Auto Parry: predicts approaching real balls targeting the local player, then calls the native Block-button parry function. Native cooldown and character restrictions remain in force. Starts OFF; hub Combat section. Uses Heartbeat plus measured/replicated ball velocity and a ping-adjusted lead. Timing/radius are heuristics and do not guarantee every parry. Requires getconnections, debug.info, debug.getupvalues, and access to the native button callback. Live gameplay verification is pending; the first test connection ended before a result was captured.
 - Blade Ball: Red Ball Beep sound notice. A short local beep plays once when the visible ball enters the native red/highlighted state, rearming after it stops being red. No automatic parry, keypress, movement, or remote requests. Includes main and training ball folders. Controlled by the hub under Alerts.
 - Friday Night Partying: native note-hit scheduler for local taps, chords, and sustain segments. Skips notes marked shouldPress=false or with positive HealthLoss. Uses the native song clock; starts OFF and is controlled by the hub. Requires module access, getfenv, getconnections, debug.info, and debug.getupvalues. Mobile executor testing is pending.
 - Basically FNF: Remix: native local-lane autoplay for taps, holds, and chords, with upscroll/downscroll and current keybinding support. Requires module access, getfenv, and debug.getupvalues. Mobile executor gameplay is unverified.
