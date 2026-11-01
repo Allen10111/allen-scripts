@@ -1,6 +1,8 @@
 -- Allen Scripts general hub. All features start OFF.
 local SOURCES={
 RemoteSpy=[====[
+-- Disabled after a confirmed BAC kick during logging.
+error("Remote Spy disabled after BAC detection during testing")
 -- Allen Scripts: local outbound remote logger. Starts OFF, no standalone UI.
 local env=getgenv()
 if env.__ALLEN_REMOTE_SPY then env.__ALLEN_REMOTE_SPY:Destroy()end
@@ -15600,7 +15602,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="remotespy",Section="Universal",Category="Alerts",Name="Remote Spy",Subtitle="Remote path inventory + outgoing argument previews · console",Badge="Debug",Key="__ALLEN_REMOTE_SPY",Source="RemoteSpy"},
+    {Id="remotespy",Section="Universal",Category="Alerts",Name="Remote Spy",Subtitle="Disabled after BAC anti-cheat kick",Badge="Disabled",Unavailable=true,Key="__ALLEN_REMOTE_SPY",Source="RemoteSpy"},
     {Id="bladeparry",Section="Blade Ball",Category="Combat",Name="Auto Parry",Subtitle="Disabled after BAC anti-cheat kick",Badge="Testing",Unavailable=true,Game=BLADE,Key="__BLADE_AUTO_PARRY",Source="BladeParry"},
     {Id="bladebeep",Section="Blade Ball",Category="Alerts",Name="Red Ball Beep",Subtitle="Short sound when the ball turns red · manual parry",Badge="Blade Ball",Game=BLADE,Key="__BLADE_BALL_BEEP",Source="BladeBeep"},
     {Id="fnp",Section="Friday Night Partying",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, sustains and chords · skips harmful notes",Badge="Friday Night Partying",Game=FNP,Key="__FNP_AUTOPLAY",Source="FNP"},
