@@ -1,5 +1,93 @@
 -- Allen Scripts general hub. All features start OFF.
 local SOURCES={
+BladeBeep=[====[
+-- Allen Scripts: Blade Ball red-ball sound notice. No automatic input.
+assert(game.GameId==4777817887,"Open Blade Ball")
+local env=getgenv()
+if env.__BLADE_BALL_BEEP then env.__BLADE_BALL_BEEP:Destroy()end
+local S={HubOnly=true,Enabled=false,Destroyed=false,Connections={},Roots={},Balls={},Beeps=0,Errors=0,Status="Off"}
+local sound=Instance.new("Sound")
+sound.Name="AllenRedBallBeep"
+sound.SoundId="rbxasset://sounds/electronicpingshort.wav"
+sound.Volume=.7;sound.PlaybackSpeed=1.4
+sound.Parent=game:GetService("SoundService")
+local function disconnect(list)for _,c in ipairs(list)do c:Disconnect()end;table.clear(list)end
+function S:IsRed(ball)
+    if ball:GetAttribute("realBall")==true then return false end -- the visible clone carries the red flag
+    local highlighted=ball:GetAttribute("highlighted")
+    if type(highlighted)=="boolean"then return highlighted end
+    local color=ball.Color
+    return color.R>.6 and color.R>color.G*1.8 and color.R>color.B*1.8
+end
+function S:Evaluate(ball)
+    local record=self.Balls[ball];if not record or not self.Enabled then return end
+    local red=ball.Parent~=nil and self:IsRed(ball)
+    if red and not record.Red then
+        sound:Stop();sound.TimePosition=0;sound:Play()
+        self.Beeps+=1
+        self.Status="Red ball · beep"
+        self.SoundGeneration=(self.SoundGeneration or 0)+1
+        local generation=self.SoundGeneration
+        task.delay(.16,function()if not self.Destroyed and self.SoundGeneration==generation then sound:Stop()end end)
+    end
+    record.Red=red
+end
+function S:Forget(ball)
+    local record=self.Balls[ball]
+    if record then disconnect(record.Connections);self.Balls[ball]=nil end
+end
+function S:Watch(ball)
+    if not ball:IsA("BasePart")or self.Balls[ball]then return end
+    local count=0;for _ in pairs(self.Balls)do count+=1 end
+    if count>=64 then return end
+    local record={Red=false,Connections={}}
+    self.Balls[ball]=record
+    local function check()
+        local ok,err=pcall(self.Evaluate,self,ball)
+        if not ok then self.Errors+=1;self.LastError=tostring(err);self.Status="Alert error"end
+    end
+    for _,name in ipairs({"highlighted","realBall"})do record.Connections[#record.Connections+1]=ball:GetAttributeChangedSignal(name):Connect(check)end
+    record.Connections[#record.Connections+1]=ball:GetPropertyChangedSignal("Color"):Connect(check)
+    record.Connections[#record.Connections+1]=ball.AncestryChanged:Connect(function()if not ball.Parent then self:Forget(ball)end end)
+    check()
+end
+function S:Bind(root)
+    if self.Roots[root]then return end
+    local list={}
+    self.Roots[root]=list
+    list[#list+1]=root.ChildAdded:Connect(function(ball)self:Watch(ball)end)
+    list[#list+1]=root.ChildRemoved:Connect(function(ball)self:Forget(ball)end)
+    for _,ball in ipairs(root:GetChildren())do self:Watch(ball)end
+end
+function S:SetEnabled(on)
+    if self.Destroyed then return end
+    disconnect(self.Connections)
+    for root,list in pairs(self.Roots)do disconnect(list);self.Roots[root]=nil end
+    local all={};for ball in pairs(self.Balls)do all[#all+1]=ball end
+    for _,ball in ipairs(all)do self:Forget(ball)end
+    sound:Stop();self.SoundGeneration=(self.SoundGeneration or 0)+1
+    self.Enabled=on==true;self.Status=self.Enabled and "Watching red-ball changes"or"Off"
+    if not self.Enabled then return end
+    local function add(root)if root.Name=="Balls"or root.Name=="TrainingBalls"then self:Bind(root)end end
+    self.Connections[#self.Connections+1]=workspace.ChildAdded:Connect(add)
+    self.Connections[#self.Connections+1]=workspace.ChildRemoved:Connect(function(root)
+        local list=self.Roots[root];if list then disconnect(list);self.Roots[root]=nil end
+        for _,ball in ipairs(root:GetChildren())do self:Forget(ball)end
+    end)
+    for _,root in ipairs(workspace:GetChildren())do add(root)end
+end
+function S:GetSnapshot()
+    return {Enabled=self.Enabled,Status=self.Status,Beeps=self.Beeps,Errors=self.Errors,SoundLoaded=sound.IsLoaded,LastError=self.LastError}
+end
+function S:Destroy()
+    if self.Destroyed then return end
+    self:SetEnabled(false);self.Destroyed=true;sound:Destroy()
+    if env.__BLADE_BALL_BEEP==self then env.__BLADE_BALL_BEEP=nil end
+end
+env.__BLADE_BALL_BEEP=S
+return S
+
+]====],
 FNP=[====[
 -- Allen Scripts: Friday Night Partying native note scheduler. Hub only.
 assert(game.GameId==10258128048,"Open Friday Night Partying")
@@ -15267,8 +15355,8 @@ local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
 local hub={Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
-local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048
-local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or "Other experience"
+local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887
+local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or "Other experience"
 local note="Browse the library. All features start OFF."
 local ffFolder,ffActor
 local function execute(name)
@@ -15293,6 +15381,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="bladebeep",Section="Blade Ball",Category="Alerts",Name="Red Ball Beep",Subtitle="Short sound when the ball turns red · manual parry",Badge="Blade Ball",Game=BLADE,Key="__BLADE_BALL_BEEP",Source="BladeBeep"},
     {Id="fnp",Section="Friday Night Partying",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, sustains and chords · skips harmful notes",Badge="Friday Night Partying",Game=FNP,Key="__FNP_AUTOPLAY",Source="FNP"},
     {Id="bfnf",Section="Basically FNF: Remix",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · local lanes",Badge="Basically FNF: Remix",Game=BFNF,Key="__BFNF_AUTOPLAY",Source="BFNF"},
     {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
@@ -15432,7 +15521,7 @@ local gamesMenu=button(window,"Games",12,126,120,42)
 gamesMenu.Visible=false
 local sectionStrip=create("ScrollingFrame",{Name="Sections",BackgroundTransparency=1,BorderSizePixel=0,
     Position=UDim2.fromOffset(194,153),Size=UDim2.fromOffset(506,28),ScrollingDirection=Enum.ScrollingDirection.X,
-    CanvasSize=UDim2.fromOffset(506,0),ScrollBarThickness=2},window)
+    CanvasSize=UDim2.fromOffset(634,0),ScrollBarThickness=2},window)
 local function connect(signal,callback)hub.Connections[#hub.Connections+1]=signal:Connect(callback)end
 local function matches(feature,query,onlyCurrent,universe)
     if onlyCurrent and feature.Game and feature.Game~=universe then return false end
@@ -15485,8 +15574,8 @@ for index,name in ipairs(gameCategories)do
     categoryButtons[name]=item
     connect(item.Activated,function()selectedGame=name;currentOnly=false;drawerOpen=false;scroll.CanvasPosition=Vector2.zero;render()end)
 end
-local categoryOrder={Aim=1,Movement=2,Rhythm=3}
-for index,name in ipairs({"All","Aim","Movement","Rhythm"})do
+local categoryOrder={Aim=1,Movement=2,Rhythm=3,Alerts=4}
+for index,name in ipairs({"All","Aim","Movement","Rhythm","Alerts"})do
     local item=button(sectionStrip,name=="All" and "All sections" or name,(index-1)*128,0,122,28)
     sectionButtons[name]=item
     connect(item.Activated,function()selectedSection=name;scroll.CanvasPosition=Vector2.zero;render()end)
@@ -15547,8 +15636,8 @@ local function applyLayout(size,touch)
         place(clearSearch,w-58,74,44,44)
         place(gamesMenu,12,128,120,44)
         place(sectionStrip,144,128,w-156,44)
-        sectionStrip.CanvasSize=UDim2.fromOffset(506,0)
-        for i,name in ipairs({"All","Aim","Movement","Rhythm"})do place(sectionButtons[name],(i-1)*128,0,122,44)end
+        sectionStrip.CanvasSize=UDim2.fromOffset(634,0)
+        for i,name in ipairs({"All","Aim","Movement","Rhythm","Alerts"})do place(sectionButtons[name],(i-1)*128,0,122,44)end
         place(results,14,182,w-28,18);results.TextSize=11
         x,y,cw,sh=12,208,w-24,math.max(42,h-262)
         place(footer,14,h-43,w-28,38);footer.TextSize=10
@@ -15570,7 +15659,7 @@ local function applyLayout(size,touch)
         place(search,194,98,506,42);search.TextSize=13
         place(clearSearch,665,106,27,26)
         place(sectionStrip,194,153,506,28)
-        for i,name in ipairs({"All","Aim","Movement","Rhythm"})do place(sectionButtons[name],(i-1)*128,0,122,28)end
+        for i,name in ipairs({"All","Aim","Movement","Rhythm","Alerts"})do place(sectionButtons[name],(i-1)*128,0,122,28)end
         place(results,196,193,498,17);results.TextSize=10
         place(footer,196,520,498,32);footer.TextSize=10
         place(sidebar,20,98,154,452);sidebar.CanvasSize=UDim2.fromOffset(0,130+#gameCategories*43);sidebar.ZIndex=1
@@ -15685,4 +15774,5 @@ task.spawn(function()
     end
 end)
 print("[Allen Scripts] General hub loaded; features OFF.")
+
 
