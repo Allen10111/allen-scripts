@@ -1,4 +1,4 @@
--- Ink Game Red Light, Green Light: native walking and automatic stopping.
+-- Ink Game Red Light, Green Light: automatic stopping on red only.
 -- Read-only light events; no outgoing remotes, raw keypresses or map indexing.
 local Policy=(function()
 local Policy={}
@@ -10,12 +10,10 @@ function Policy.Light(packet)
     if packet.GreenLight then return "green" end
     return nil
 end
-function Policy.Action(active,light,hasCharacter,hasTarget,distance)
+function Policy.Action(active,light,hasCharacter)
     if not active or not hasCharacter then return "idle" end
-    if light~="green" then return "stop" end
-    if not hasTarget then return "stop" end
-    if distance<=6 then return "arrived" end
-    return "run"
+    if light=="red" then return "stop" end
+    return "manual"
 end
 return Policy
 
@@ -30,7 +28,7 @@ local env=getgenv()
 if env.__ALLEN_INK_RLGL then env.__ALLEN_INK_RLGL:Destroy() end
 local State={HubOnly=true,Enabled=false,Destroyed=false,Connections={},Light="unknown",Status="Off",Stops=0,Source="None"}
 local renderName="AllenRLGL_"..HttpService:GenerateGUID(false)
-local controls,controlsWereEnabled,managing=false,nil,false
+local managing=false
 local image,imageConnection
 local checkElapsed=0
 local function connect(signal,callback)
@@ -62,28 +60,18 @@ local function release()
     if managing then
         local _,h=character()
         if h then h:Move(Vector3.zero,false) end
-        if controls and controlsWereEnabled then pcall(function() controls:Enable() end) end
     end
-    managing=false;controlsWereEnabled=nil
-end
-local function takeControls()
-    if managing then return true end
-    assert(controls and type(controls.Disable)=="function","Native player controls are unavailable")
-    -- The default ControlModule exposes enabled; do not enable controls another system disabled.
-    if controls.enabled==false then State.Status="Waiting for native movement controls";return false end
-    controlsWereEnabled=true
-    controls:Disable();managing=true
-    return true
+    managing=false
 end
 local function setLight(value,source)
     if not value then return end
     local changed=State.Light~=value
     State.Light=value;State.Source=source
-    if value~="green" and active() then
+    if value=="red" and active() then
         local _,h,r=character()
-        if takeControls() then stop(h,r) end
+        managing=true;stop(h,r)
         if value=="red" and changed then State.Stops+=1 end
-    elseif value=="over" then release() end
+    else release() end
 end
 local function assetId(value) return tostring(value):match("%d+") end
 local function bindImage()
@@ -111,22 +99,6 @@ local function bindImage()
     imageConnection=image:GetPropertyChangedSignal("Image"):Connect(read)
     read()
 end
-local function destination(r)
-    local doll=workspace:FindFirstChild("SQUIDDOLL123")
-    if not doll then return end
-    local point
-    if doll:IsA("Model") then point=doll:GetPivot().Position
-    elseif doll:IsA("BasePart") then point=doll.Position end
-    if not point or math.abs(point.Y-r.Position.Y)>150 then return end
-    point=Vector3.new(point.X,r.Position.Y,point.Z)
-    local distance=(point-r.Position).Magnitude
-    -- Prevent movement toward an unrelated distant map or a lobby prop.
-    if distance>2500 then return end
-    return point,distance
-end
-local rayParams=RaycastParams.new()
-rayParams.FilterType=Enum.RaycastFilterType.Exclude
-rayParams.IgnoreWater=true
 local function step()
     if not active() then
         release()
@@ -135,38 +107,22 @@ local function step()
     end
     local c,h,r=character()
     if not c then release();State.Status="Waiting for character";return end
-    if not takeControls() then return end
-    if c:FindFirstChild("Ragdoll") or c:FindFirstChild("Stun") or c:FindFirstChild("DisableMovement") then
-        stop(h,r);State.Status="Waiting for movement recovery";return
+    local action=Policy.Action(true,State.Light,true)
+    if action=="stop" then
+        -- Default PC/touch controls remain enabled. Override movement after their update,
+        -- so held keys and the thumbstick keep their normal state when green returns.
+        managing=true;stop(h,r)
+        State.Status="Red light · stopped"
+    else
+        release()
+        State.Status=State.Light=="green" and "Green light · manual movement" or "Waiting for light signal · manual movement"
     end
-    local point,distance=destination(r)
-    local action=Policy.Action(true,State.Light,true,point~=nil,distance or math.huge)
-    if action~="run" then
-        stop(h,r)
-        State.Status=action=="arrived" and "Doll area reached · waiting for round result"
-            or State.Light=="red" and "Red light · stopped"
-            or State.Light=="unknown" and "Waiting for a confirmed green light"
-            or "Waiting for the native doll target"
-        return
-    end
-    local direction=(point-r.Position).Unit
-    rayParams.FilterDescendantsInstances={workspace:FindFirstChild("Live") or c,workspace:FindFirstChild("Effects") or c}
-    local floor=workspace:Raycast(r.Position+direction*5,Vector3.new(0,-12,0),rayParams)
-    local wall=workspace:Raycast(r.Position,direction*4,rayParams)
-    if not floor or wall then stop(h,r);State.Status="Route blocked · stopped";return end
-    h:Move(direction,false)
-    State.Status="Green light · walking toward finish"
 end
 function State:SetEnabled(value)
     if self.Destroyed then return end
     value=value==true
     if self.Enabled==value then return end
     if value then
-        local ps=LP:FindFirstChild("PlayerScripts")
-        local module=ps and ps:FindFirstChild("PlayerModule")
-        assert(module,"Native PlayerModule is not ready")
-        controls=require(module):GetControls()
-        assert(controls and type(controls.Disable)=="function" and type(controls.Enable)=="function","Native movement control is unavailable")
         self.Enabled=true;self.Light="unknown";self.Source="None";self.Status="Waiting for light signal"
         image=nil;bindImage()
     else
