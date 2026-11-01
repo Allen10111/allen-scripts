@@ -14,6 +14,7 @@ Black interface with a game-category sidebar, instant game/script search, and Ai
 
 ## Included
 
+- Friday Night Partying: native note-hit scheduler for local taps, chords, and sustain segments. Skips notes marked shouldPress=false or with positive HealthLoss. Uses the native song clock; starts OFF and is controlled by the hub. Requires module access, getfenv, getconnections, debug.info, and debug.getupvalues. Mobile executor testing is pending.
 - Basically FNF: Remix: native local-lane autoplay for taps, holds, and chords, with upscroll/downscroll and current keybinding support. Requires module access, getfenv, and debug.getupvalues. Mobile executor gameplay is unverified.
 - Universal: PC-only soft camera lock with shift-lock compensation and a red target highlight.
 - Ink Game: auto-dodge using the available native dash.
