@@ -9,7 +9,7 @@ local S={HubOnly=true,Enabled=false,Destroyed=false,Connections={},Roots={},Ball
 local sound=Instance.new("Sound")
 sound.Name="AllenRedBallBeep"
 sound.SoundId="rbxasset://sounds/electronicpingshort.wav"
-sound.Volume=.7;sound.PlaybackSpeed=1.4
+sound.Volume=3;sound.PlaybackSpeed=1.4
 sound.Parent=game:GetService("SoundService")
 local function disconnect(list)for _,c in ipairs(list)do c:Disconnect()end;table.clear(list)end
 function S:IsRed(ball)
