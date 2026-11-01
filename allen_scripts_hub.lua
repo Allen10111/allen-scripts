@@ -2,6 +2,7 @@
 local SOURCES={
 BladeParry=[====[
 -- Allen Scripts: Blade Ball native parry controller, hub only.
+error("Auto Parry disabled after a reported Roblox crash; do not run this experimental build")
 assert(game.GameId==4777817887,"Open Blade Ball")
 assert(type(getconnections)=="function"and debug and type(debug.getupvalues)=="function","Executor needs getconnections and debug.getupvalues")
 local LP=game:GetService("Players").LocalPlayer
@@ -15502,7 +15503,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="bladeparry",Section="Blade Ball",Category="Combat",Name="Auto Parry",Subtitle="Incoming ball prediction · native parry cooldown",Badge="Blade Ball",Game=BLADE,Key="__BLADE_AUTO_PARRY",Source="BladeParry"},
+    {Id="bladeparry",Section="Blade Ball",Category="Combat",Name="Auto Parry",Subtitle="Disabled while investigating the test crash",Badge="Testing",Unavailable=true,Game=BLADE,Key="__BLADE_AUTO_PARRY",Source="BladeParry"},
     {Id="bladebeep",Section="Blade Ball",Category="Alerts",Name="Red Ball Beep",Subtitle="Short sound when the ball turns red · manual parry",Badge="Blade Ball",Game=BLADE,Key="__BLADE_BALL_BEEP",Source="BladeBeep"},
     {Id="fnp",Section="Friday Night Partying",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, sustains and chords · skips harmful notes",Badge="Friday Night Partying",Game=FNP,Key="__FNP_AUTOPLAY",Source="FNP"},
     {Id="bfnf",Section="Basically FNF: Remix",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · local lanes",Badge="Basically FNF: Remix",Game=BFNF,Key="__BFNF_AUTOPLAY",Source="BFNF"},
