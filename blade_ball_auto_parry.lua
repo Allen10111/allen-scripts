@@ -1,38 +1,25 @@
--- Allen Scripts: Blade Ball native parry controller, hub only.
-error("Auto Parry disabled after a reported Roblox crash; do not run this experimental build")
+-- Allen Scripts: Experimental Blade Ball auto parry, disabled.
+error("Auto Parry disabled after a BAC anti-cheat kick during testing")
 assert(game.GameId==4777817887,"Open Blade Ball")
-assert(type(getconnections)=="function"and debug and type(debug.getupvalues)=="function","Executor needs getconnections and debug.getupvalues")
+local VirtualInput=game:GetService("VirtualInputManager")
 local LP=game:GetService("Players").LocalPlayer
 local env=getgenv()
 if env.__BLADE_AUTO_PARRY then env.__BLADE_AUTO_PARRY:Destroy()end
 local S={HubOnly=true,Enabled=false,Destroyed=false,Connections={},Balls={},Requests=0,Successes=0,Errors=0,NextRequest=0,Status="Off"}
 local function native()
-    local gui=LP:FindFirstChild("PlayerGui")
-    local hotbar=gui and gui:FindFirstChild("Hotbar")
-    if not hotbar then return end
-    for _,name in ipairs({"Block","NewBlockButton"})do
-        local button=hotbar:FindFirstChild(name)
-        if button then
-            for _,signal in ipairs({button.Activated,button.MouseButton1Up})do
-                for _,c in ipairs(getconnections(signal))do
-                    local f=c.Function
-                    if f and debug.info(f,"s"):find("SwordsController",1,true)then
-                        local fn=debug.getupvalues(f)[1]
-                        if type(fn)=="function"then return fn end
-                    end
-                end
-            end
-        end
+    return function()
+        local gui=LP:FindFirstChild("PlayerGui")
+        if not gui or not gui:FindFirstChild("Hotbar") then return false end
+        VirtualInput:SendKeyEvent(true,Enum.KeyCode.F,false,game)
+        S.KeyDown=true
+        task.delay(.035,function()
+            pcall(function()VirtualInput:SendKeyEvent(false,Enum.KeyCode.F,false,game)end)
+            S.KeyDown=false
+        end)
+        return true
     end
 end
-local function invoke(fn)
-    local gi=getthreadidentity or getidentity;local si=setthreadidentity or setidentity
-    local identity=gi and gi();if si and identity then si(2)end
-    local ok,result=pcall(fn)
-    if si and identity then si(identity)end
-    if not ok then error(result,0)end
-    return result
-end
+local function invoke(fn)return fn()end
 function S:ShouldParry(relative,velocity,radius,lead)
     local distance=relative.Magnitude
     if distance<=radius then return true,0 end
@@ -45,6 +32,7 @@ function S:ShouldParry(relative,velocity,radius,lead)
     return eta<=lead and clearance<=radius+3,eta
 end
 function S:SetEnabled(on)
+    if self.KeyDown then pcall(function()VirtualInput:SendKeyEvent(false,Enum.KeyCode.F,false,game)end);self.KeyDown=false end
     self.Enabled=on==true and not self.Destroyed;self.NextRequest=0;table.clear(self.Balls)
     self.Status=self.Enabled and "Watching incoming ball"or"Off"
 end
@@ -99,7 +87,7 @@ function S:Step(dt)
     for ball in pairs(self.Balls)do if not seen[ball]then self.Balls[ball]=nil end end
     self.ETA=bestETA
     if best and now>=self.NextRequest then
-        self.NextRequest=now+.10
+        self.NextRequest=now+.20
         if invoke(self.Native)==true then
             bestRecord.Fired=true;self.Requests+=1;self.Status="Parry requested · "..self.Requests
         else self.Status="Native cooldown"end
