@@ -1,3 +1,5 @@
+-- Disabled after a confirmed BAC kick during logging.
+error("Remote Spy disabled after BAC detection during testing")
 -- Allen Scripts: local outbound remote logger. Starts OFF, no standalone UI.
 local env=getgenv()
 if env.__ALLEN_REMOTE_SPY then env.__ALLEN_REMOTE_SPY:Destroy()end
