@@ -10,7 +10,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/Allen10111/allen-scri
 
 ## Library
 
-Black interface with a game-category sidebar, instant game/script search, and Aim, Movement, and Rhythm sections. Use This game only to narrow results.
+Black tabbed interface inspired by Ringta's visible GUI layout, with Allen Scripts branding. Choose a game from the selector, use the left sidebar to open feature pages, and search across the complete library by game or script name. Ink Game has Home, Red Light, Dalgona and Movement pages. Each feature retains its own ON/OFF switch. The title bar supports dragging, minimizing, expanding and closing. No external UI library or Ringta script is executed.
 
 ## Included
 
@@ -36,7 +36,7 @@ The hub and bundled engines are readable, not obfuscated. Executor support is re
 
 ## Mobile
 
-The compact mobile window is capped at 430 by 430 pixels and adapts to touch screens with portrait and landscape layouts, a scrollable Games menu, swipeable section tabs, 44-pixel switches, and a touch drag handle. Safe-area and on-screen-keyboard changes are handled automatically. Tap AS to reopen the window. The executor must still support the APIs required by each game, including Actor execution for Funky Friday.
+The mobile window is capped at 430 by 430 pixels and adapts to portrait and landscape screens. A game selector and Tabs drawer replace the desktop sidebar. Feature lists scroll vertically and switches have 44-pixel touch height. Safe-area and on-screen-keyboard changes are handled. Tap AS to reopen the window and drag the title bar to move it. Desktop and simulated portrait/landscape layouts, cross-game search and Dalgona page filtering were checked in-game; physical mobile touch testing of this UI revision is pending. The executor must still support each feature's required APIs.
 
 ## Auto Dodge engine
 
