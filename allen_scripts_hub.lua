@@ -16472,329 +16472,305 @@ local function change(feature)
         hub.Busy[feature.Id]=nil
     end)
 end
-local C={BG=Color3.fromRGB(6,6,7),Card=Color3.fromRGB(17,17,19),Line=Color3.fromRGB(43,43,47),
-    Text=Color3.fromRGB(242,242,245),Muted=Color3.fromRGB(143,143,151),Accent=Color3.fromRGB(225,225,230),Green=Color3.fromRGB(113,207,157)}
+-- Black tabbed library, inspired by the visible Ringta window layout.
+local C={BG=Color3.fromRGB(7,7,8),Panel=Color3.fromRGB(13,13,15),Card=Color3.fromRGB(23,23,26),
+    Selected=Color3.fromRGB(31,31,35),Line=Color3.fromRGB(39,39,43),Text=Color3.fromRGB(242,242,245),
+    Muted=Color3.fromRGB(145,145,155),Accent=Color3.fromRGB(230,230,235)}
 local function create(class,props,parent)
-    local object=Instance.new(class);for k,v in pairs(props)do object[k]=v end;object.Parent=parent;return object
+    local o=Instance.new(class);for k,v in pairs(props)do o[k]=v end;o.Parent=parent;return o
 end
-local function rounded(object,radius)create("UICorner",{CornerRadius=UDim.new(0,radius)},object);return object end
+local function rounded(o,r)create("UICorner",{CornerRadius=UDim.new(0,r)},o);return o end
+local function label(parent,value,size)
+    return create("TextLabel",{Text=value,Font=Enum.Font.Gotham,TextSize=size or 13,TextColor3=C.Text,
+        TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,BorderSizePixel=0},parent)
+end
+local function button(parent,value)
+    return rounded(create("TextButton",{Text=value,Font=Enum.Font.Gotham,TextSize=14,TextColor3=C.Text,
+        BackgroundColor3=C.Card,AutoButtonColor=false,BorderSizePixel=0},parent),8)
+end
+local function place(o,x,y,w,h)o.Position=UDim2.fromOffset(x,y);o.Size=UDim2.fromOffset(w,h)end
+local function connect(signal,fn)local c=signal:Connect(fn);hub.Connections[#hub.Connections+1]=c;return c end
 local gui=create("ScreenGui",{Name="AllenScriptsGeneralHub",ResetOnSpawn=false,IgnoreGuiInset=false,DisplayOrder=1000010},nil)
 pcall(function()gui.ScreenInsets=Enum.ScreenInsets.CoreUISafeInsets end)
 local mounted=false
-if type(gethui)=="function" then mounted=pcall(function()local parent=gethui();assert(parent);gui.Parent=parent end)end
+if type(gethui)=="function" then mounted=pcall(function()gui.Parent=gethui();assert(gui.Parent)end)end
 if not mounted then gui.Parent=LP:WaitForChild("PlayerGui")end
 hub.Gui=gui
-local root=create("Frame",{Name="SafeArea",Size=UDim2.fromScale(1,1),BackgroundTransparency=1},gui)
-local window=rounded(create("Frame",{Name="Window",Size=UDim2.fromOffset(720,570),Position=UDim2.new(.5,-360,.5,-285),
-    BackgroundColor3=C.BG,BorderSizePixel=0},root),18)
+local root=create("Frame",{Name="SafeArea",BackgroundTransparency=1,Size=UDim2.fromScale(1,1)},gui)
+local window=rounded(create("Frame",{Name="Window",BackgroundColor3=C.BG,BorderSizePixel=0,Size=UDim2.fromOffset(720,520)},root),16)
 create("UIStroke",{Color=C.Line,Thickness=1},window)
-local scale=create("UIScale",{Scale=1},window)
-local function text(parent,content,x,y,w,h,size,color)
-    return create("TextLabel",{BackgroundTransparency=1,Text=content,TextSize=size or 13,TextColor3=color or C.Text,
-        Font=Enum.Font.Gotham,TextXAlignment=Enum.TextXAlignment.Left,Size=UDim2.fromOffset(w,h),Position=UDim2.fromOffset(x,y)},parent)
-end
-local function button(parent,content,x,y,w,h)
-    return rounded(create("TextButton",{Text=content,TextSize=12,Font=Enum.Font.GothamBold,TextColor3=C.Text,
-        BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h)},parent),9)
-end
-local header=create("Frame",{Name="DragHandle",Size=UDim2.fromOffset(600,78),BackgroundTransparency=1,Active=true},window)
-header.ZIndex=5
-local badge=rounded(create("Frame",{BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.fromOffset(20,20),Size=UDim2.fromOffset(38,38)},window),12)
-create("UIStroke",{Color=C.Line,Thickness=1},badge)
-local initials=text(badge,"AS",0,0,38,38,14);initials.TextXAlignment=Enum.TextXAlignment.Center;initials.Font=Enum.Font.GothamBold
-local title=text(window,"Allen Scripts",70,17,280,27,21);title.Font=Enum.Font.GothamBold
-local subtitle=text(window,"SCRIPT LIBRARY  /  "..gameName,71,44,310,18,10,C.Muted)
-subtitle.TextTruncate=Enum.TextTruncate.AtEnd
-local hide=button(window,"—",630,24,28,28)
-local close=button(window,"×",668,24,28,28)
-local launcher=rounded(create("TextButton",{Name="OpenHub",Text="AS",Font=Enum.Font.GothamBold,TextSize=15,
-    TextColor3=C.Text,BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.new(0,18,.5,-24),Size=UDim2.fromOffset(48,48)},root),14)
+local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
+local logo=label(window,"◇",30)
+local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
+local subtitle=label(window,"SCRIPT LIBRARY",10);subtitle.TextColor3=C.Muted
+local minimize=button(window,"—");minimize.Name="Minimize"
+local maximize=button(window,"□");maximize.Name="Maximize"
+local close=button(window,"×");close.Name="Close"
+for _,b in ipairs({minimize,maximize,close})do b.BackgroundTransparency=1;b.TextSize=19 end
+local launcher=button(root,"AS");launcher.Name="OpenHub";launcher.Font=Enum.Font.GothamBold
+place(launcher,18,220,46,46)
 create("UIStroke",{Color=C.Line,Thickness=1},launcher)
-local divider=create("Frame",{BackgroundColor3=C.Line,BorderSizePixel=0,Position=UDim2.fromOffset(20,79),Size=UDim2.fromOffset(680,1)},window)
-local sidebar=rounded(create("ScrollingFrame",{Name="Categories",BackgroundColor3=Color3.fromRGB(11,11,13),BorderSizePixel=0,
-    Position=UDim2.fromOffset(20,98),Size=UDim2.fromOffset(154,452),CanvasSize=UDim2.fromOffset(0,452),ScrollBarThickness=5,
-    Active=true,ScrollingEnabled=true,ScrollingDirection=Enum.ScrollingDirection.Y,ScrollBarImageColor3=C.Accent},window),12)
-local gamesLabel=text(sidebar,"GAMES",14,16,120,18,10,C.Muted)
-local libraryCount=text(sidebar,tostring(#features).." scripts available",14,416,126,18,10,C.Muted)
-local categoryButtons,sectionButtons={},{}
-local selectedGame,selectedSection="All","All"
-local search=rounded(create("TextBox",{Name="Search",PlaceholderText="Search games or scripts…",Text="",ClearTextOnFocus=false,
-    TextColor3=C.Text,PlaceholderColor3=C.Muted,TextSize=13,Font=Enum.Font.Gotham,TextXAlignment=Enum.TextXAlignment.Left,
-    BackgroundColor3=C.Card,BorderSizePixel=0,Position=UDim2.fromOffset(194,98),Size=UDim2.fromOffset(506,42)},window),10)
-create("UIStroke",{Color=C.Line,Thickness=1},search)
-create("UIPadding",{PaddingLeft=UDim.new(0,14),PaddingRight=UDim.new(0,43)},search)
-local clearSearch=button(window,"×",665,106,27,26)
-local currentGame=button(sidebar,"This game only",10,284,134,32)
-local currentOnly=false
-local results=text(window,"",196,193,498,17,10,C.Muted)
-local scroll=create("ScrollingFrame",{Name="Features",Position=UDim2.fromOffset(194,221),Size=UDim2.fromOffset(506,282),
-    BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=C.Accent,
-    CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,Active=true,ScrollingEnabled=true,
-    ScrollingDirection=Enum.ScrollingDirection.Y},window)
-create("UIListLayout",{Padding=UDim.new(0,10),SortOrder=Enum.SortOrder.LayoutOrder},scroll)
-local empty=text(window,"No scripts found\nTry Ink Game, Funky Friday, rosu or Universal.",214,299,466,70,13,C.Muted)
-empty.TextXAlignment=Enum.TextXAlignment.Center;empty.TextWrapped=true
-local footer=text(window,"",196,520,498,32,10,C.Muted);footer.TextWrapped=true;footer.TextYAlignment=Enum.TextYAlignment.Top
-local compact,drawerOpen=false,false
-local dismiss=create("TextButton",{Name="CloseCategories",Text="",BackgroundColor3=C.BG,BackgroundTransparency=.15,
-    BorderSizePixel=0,Visible=false,ZIndex=20},window)
-local gamesMenu=button(window,"Games",12,126,120,42)
-gamesMenu.Visible=false
-local sectionStrip=create("ScrollingFrame",{Name="Sections",BackgroundTransparency=1,BorderSizePixel=0,
-    Position=UDim2.fromOffset(194,153),Size=UDim2.fromOffset(506,28),ScrollingDirection=Enum.ScrollingDirection.X,
-    CanvasSize=UDim2.fromOffset(890,0),ScrollBarThickness=2},window)
-local function connect(signal,callback)hub.Connections[#hub.Connections+1]=signal:Connect(callback)end
+local gameSelect=button(window,gameName.."  v");gameSelect.Name="ChooseGame";gameSelect.TextSize=12
+launcher.Visible=false
+connect(window:GetPropertyChangedSignal("Visible"),function()launcher.Visible=not window.Visible end)
+local tabsButton=button(window,"Tabs");tabsButton.Name="OpenTabs"
+local sidebar=create("ScrollingFrame",{Name="Tabs",BackgroundTransparency=1,BorderSizePixel=0,
+    ScrollBarThickness=3,ScrollBarImageColor3=C.Muted,Active=true,ScrollingEnabled=true,
+    ScrollingDirection=Enum.ScrollingDirection.Y,CanvasSize=UDim2.new()},window)
+local navCaption=label(sidebar,"FEATURES",10);navCaption.TextColor3=C.Muted
+local panel=rounded(create("Frame",{Name="ContentPanel",BackgroundColor3=C.Panel,BorderSizePixel=0},window),12)
+local pageIcon=label(panel,"◇",19)
+local pageTitle=label(panel,"Home",15);pageTitle.Font=Enum.Font.GothamMedium
+local pageLine=create("Frame",{BackgroundColor3=C.Line,BorderSizePixel=0},panel)
+local search=rounded(create("TextBox",{Name="Search",Text="",PlaceholderText="Search games or scripts…",ClearTextOnFocus=false,
+    BackgroundColor3=C.BG,BorderSizePixel=0,TextColor3=C.Text,PlaceholderColor3=C.Muted,TextSize=12,
+    TextXAlignment=Enum.TextXAlignment.Left,Font=Enum.Font.Gotham},panel),8)
+create("UIPadding",{PaddingLeft=UDim.new(0,12),PaddingRight=UDim.new(0,36)},search)
+local clearSearch=button(panel,"×");clearSearch.BackgroundTransparency=1
+local results=label(panel,"Main Features",12);results.TextColor3=C.Muted
+local scroll=create("ScrollingFrame",{Name="Features",BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=4,
+    ScrollBarImageColor3=C.Muted,Active=true,ScrollingEnabled=true,ScrollingDirection=Enum.ScrollingDirection.Y,
+    AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},panel)
+create("UIListLayout",{Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder},scroll)
+create("UIPadding",{PaddingBottom=UDim.new(0,10)},scroll)
+local empty=label(panel,"No matching scripts",13);empty.TextColor3=C.Muted;empty.TextXAlignment=Enum.TextXAlignment.Center
+local footer=label(window,"All features start OFF",10);footer.TextColor3=C.Muted;footer.TextTruncate=Enum.TextTruncate.AtEnd
+local dismiss=create("TextButton",{Name="DismissMenu",Text="",BackgroundColor3=Color3.new(0,0,0),BackgroundTransparency=.25,
+    Size=UDim2.fromScale(1,1),Visible=false,BorderSizePixel=0,ZIndex=20},window)
+local gameMenu=rounded(create("ScrollingFrame",{Name="Games",BackgroundColor3=C.Panel,BorderSizePixel=0,
+    ScrollBarThickness=4,Active=true,ScrollingEnabled=true,ScrollingDirection=Enum.ScrollingDirection.Y,
+    Visible=false,ZIndex=30,CanvasSize=UDim2.fromOffset(0,#gameCategories*44+12)},window),10)
+create("UIStroke",{Color=C.Line,Thickness=1},gameMenu)
+local categoryButtons,sectionButtons,navButtons={},{},{}
+local selectedGame=knownCategories[gameName] and gameName or "All"
+local selectedTab="Home"
+local compact,drawerOpen,gamesOpen,expanded=false,false,false,false
+local panelWidth,panelHeight=720,520
+local panelPosition,availableSize,previewSize,previewTouch
+local render,layout,buildNavigation
 local function matches(feature,query,onlyCurrent,universe)
     if onlyCurrent and feature.Game and feature.Game~=universe then return false end
-    local hay=(feature.Section.." "..feature.Name.." "..feature.Subtitle.." "..(feature.Category or "")):lower():gsub("[^%w]","")
-    for term in query:lower():gmatch("%w+")do
-        if not hay:find(term,1,true) then return false end
-    end
+    local hay=(feature.Section.." "..feature.Name.." "..feature.Subtitle.." "..feature.Category):lower():gsub("[^%w]","")
+    for term in query:lower():gmatch("%w+")do if not hay:find(term,1,true)then return false end end
     return true
 end
-local sectionHeaders={}
-local function render()
-    sidebar.Visible=not compact or drawerOpen
-    dismiss.Visible=compact and drawerOpen
-    gamesMenu.Text=selectedGame=="All" and "Games" or selectedGame
-    for name,item in pairs(categoryButtons)do item.BackgroundColor3=selectedGame==name and C.Line or C.Card end
-    for name,item in pairs(sectionButtons)do item.BackgroundColor3=selectedSection==name and C.Line or C.Card end
-    currentGame.BackgroundColor3=currentOnly and C.Line or C.Card
-    clearSearch.Visible=search.Text~=""
-    local visible,sections=0,{}
-    for _,item in pairs(sectionHeaders)do item.Visible=false end
-    for _,row in ipairs(hub.Rows)do
-        row.Card.Visible=matches(row.Feature,search.Text,currentOnly,game.GameId)
-            and (selectedGame=="All" or selectedGame==row.Feature.Section)
-            and (selectedSection=="All" or selectedSection==row.Feature.Category)
-        if row.Card.Visible then visible+=1;sections[row.Feature.Section]=true;sectionHeaders[row.Feature.Category].Visible=true end
-        local q=snapshot(row.Feature)
-        local busy=hub.Busy[row.Feature.Id]
-        local unavailable=row.Feature.Unavailable or row.Feature.Game and row.Feature.Game~=game.GameId
-        row.Label.Text=busy and "…" or unavailable and "N/A" or q.Enabled and "ON" or "OFF"
-        row.Toggle.BackgroundColor3=q.Enabled and C.Accent or C.Line
-        row.Label.TextColor3=unavailable and C.Muted or C.Text
-        row.Knob.Position=UDim2.fromOffset(q.Enabled and (row.OnX or 38) or (row.OffX or 4),row.KnobY or 4)
-        row.Knob.BackgroundColor3=unavailable and C.Muted or q.Enabled and C.BG or C.Text
-        row.Toggle.Active=not unavailable and not busy
-        row.State.Text=busy and "Loading…" or (q.Status or "Off")..(q.Hits and "  ·  "..q.Hits.." hits" or "")
-        row.State.TextColor3=q.Enabled and C.Green or C.Muted
-    end
-    local count=0;for _ in pairs(sections)do count+=1 end
-    results.Text=tostring(visible)..(visible==1 and " script" or " scripts").."  ·  "..tostring(count)..(count==1 and " game / category" or " games / categories")
-    empty.Visible=visible==0
-    footer.Text=note..(compact and "\nTap AS to reopen · drag the title bar" or "\nRight Shift: hide / show  ·  AS: reopen")
+local function inTab(f)
+    if selectedTab=="Home" then return true end
+    if selectedTab=="Red Light" then return f.Id=="inkrlgl" end
+    if selectedTab=="Dalgona" then return f.Id:sub(1,7)=="dalgona" end
+    return f.Category==selectedTab
 end
-connect(search:GetPropertyChangedSignal("Text"),function()scroll.CanvasPosition=Vector2.zero;render()end)
-connect(clearSearch.Activated,function()search.Text="";search:ReleaseFocus()end)
-connect(currentGame.Activated,function()currentOnly=not currentOnly;drawerOpen=false;scroll.CanvasPosition=Vector2.zero;render()end)
-connect(gamesMenu.Activated,function()drawerOpen=not drawerOpen;render()end)
-connect(dismiss.Activated,function()drawerOpen=false;render()end)
+local function chooseGame(name)
+    if name~="All" and not knownCategories[name] then return end
+    selectedGame=name;selectedTab="Home";gamesOpen=false;drawerOpen=false
+    search.Text="";scroll.CanvasPosition=Vector2.zero
+    buildNavigation();layout();render()
+end
 for index,name in ipairs(gameCategories)do
-    local item=button(sidebar,name=="All" and "All scripts" or name,10,47+(index-1)*43,134,34)
-    categoryButtons[name]=item
-    connect(item.Activated,function()selectedGame=name;currentOnly=false;drawerOpen=false;scroll.CanvasPosition=Vector2.zero;render()end)
+    local b=button(gameMenu,name=="All" and "All games" or name)
+    place(b,6,6+(index-1)*44,218,40);b.ZIndex=31;b.TextXAlignment=Enum.TextXAlignment.Left
+    create("UIPadding",{PaddingLeft=UDim.new(0,12)},b)
+    categoryButtons[name]=b
+    connect(b.Activated,function()chooseGame(name)end)
 end
-local categoryOrder={Aim=1,Movement=2,Rhythm=3,Alerts=4,Combat=5,Minigames=6}
-for index,name in ipairs({"All","Aim","Movement","Rhythm","Alerts","Combat","Minigames"})do
-    local item=button(sectionStrip,name=="All" and "All sections" or name,(index-1)*128,0,122,28)
-    sectionButtons[name]=item
-    connect(item.Activated,function()selectedSection=name;scroll.CanvasPosition=Vector2.zero;render()end)
-end
-for name,index in pairs(categoryOrder)do
-    sectionHeaders[name]=text(scroll,name:upper(),0,0,490,22,10,C.Muted)
-    sectionHeaders[name].Size=UDim2.new(1,-7,0,22);sectionHeaders[name].LayoutOrder=index*100
+buildNavigation=function()
+    for _,b in ipairs(navButtons)do b:Destroy()end
+    table.clear(navButtons);table.clear(sectionButtons)
+    local tabs={{"Home","◇"}}
+    if selectedGame=="Ink Game" then
+        tabs[#tabs+1]={"Red Light","◉"};tabs[#tabs+1]={"Dalgona","◇"};tabs[#tabs+1]={"Movement","↗"}
+    else
+        for _,name in ipairs({"Aim","Movement","Rhythm","Alerts","Combat","Minigames"})do
+            local found=false
+            for _,f in ipairs(features)do if f.Category==name and (selectedGame=="All" or f.Section==selectedGame)then found=true;break end end
+            if found then tabs[#tabs+1]={name,"◇"} end
+        end
+    end
+    for index,item in ipairs(tabs)do
+        local name=item[1]
+        local b=button(sidebar,item[2].."   "..name)
+        b.TextXAlignment=Enum.TextXAlignment.Left;b.BackgroundTransparency=1
+        create("UIPadding",{PaddingLeft=UDim.new(0,12)},b)
+        b.Name="Tab_"..name;navButtons[#navButtons+1]=b;sectionButtons[name]=b
+        connect(b.Activated,function()
+            selectedTab=name;drawerOpen=false;search.Text="";scroll.CanvasPosition=Vector2.zero;render()
+        end)
+    end
+    sidebar.CanvasSize=UDim2.fromOffset(0,36+#navButtons*44)
 end
 for index,feature in ipairs(features)do
-    local card=rounded(create("Frame",{Name=feature.Id,Size=UDim2.new(1,-7,0,116),BackgroundColor3=C.Card,
-        BorderSizePixel=0,LayoutOrder=categoryOrder[feature.Category]*100+index},scroll),12)
-    create("UIStroke",{Color=Color3.fromRGB(30,30,33),Thickness=1},card)
-    local gameLabel=text(card,feature.Section:upper(),15,9,300,16,10,C.Accent)
-    local name=text(card,feature.Name,15,29,360,24,16);name.Font=Enum.Font.GothamBold
-    local description=text(card,feature.Subtitle,15,55,354,26,10,C.Muted);description.TextWrapped=true
-    local status=text(card,"Not loaded",15,89,460,16,10,C.Muted)
-    local caption=text(card,"OFF",414,24,64,17,10,C.Muted);caption.TextXAlignment=Enum.TextXAlignment.Center
-    local toggle=rounded(create("TextButton",{Name="Switch",Text="",AutoButtonColor=false,
-        Position=UDim2.fromOffset(414,49),Size=UDim2.fromOffset(64,30),BorderSizePixel=0,BackgroundColor3=C.Line},card),15)
-    local knob=rounded(create("Frame",{Name="Thumb",Size=UDim2.fromOffset(22,22),Position=UDim2.fromOffset(4,4),
-        BackgroundColor3=C.Text,BorderSizePixel=0},toggle),11)
-    hub.Rows[#hub.Rows+1]={Feature=feature,Card=card,Toggle=toggle,Label=caption,Knob=knob,State=status,
-        GameLabel=gameLabel,Title=name,Description=description}
-    connect(toggle.Activated,function()change(feature)end)
+    local card=rounded(create("Frame",{Name=feature.Id,BackgroundColor3=C.Card,BorderSizePixel=0,
+        LayoutOrder=index,Size=UDim2.new(1,-6,0,96)},scroll),10)
+    local name=label(card,feature.Name,14);name.Font=Enum.Font.GothamMedium;name.TextWrapped=true
+    local desc=label(card,feature.Subtitle,11);desc.TextColor3=C.Muted;desc.TextWrapped=true
+    local state=label(card,"Off",11);state.TextColor3=C.Muted;state.TextTruncate=Enum.TextTruncate.AtEnd
+    local toggle=rounded(create("TextButton",{Name="Switch",Text="",AutoButtonColor=false,BackgroundColor3=C.Line,BorderSizePixel=0},card),16)
+    local knob=rounded(create("Frame",{Name="Thumb",BackgroundColor3=C.Text,BorderSizePixel=0},toggle),12)
+    toggle:FindFirstChildOfClass("UICorner").CornerRadius=UDim.new(1,0)
+    knob:FindFirstChildOfClass("UICorner").CornerRadius=UDim.new(1,0)
+    local caption=label(card,"OFF",9);caption.TextXAlignment=Enum.TextXAlignment.Center;caption.TextColor3=C.Muted
+    hub.Rows[#hub.Rows+1]={Feature=feature,Card=card,Title=name,Description=desc,State=state,Toggle=toggle,Knob=knob,Label=caption}
+    connect(toggle.Activated,function()change(feature);render()end)
 end
-local panelPosition
-local panelWidth,panelHeight=720,570
-local availableSize
-local function layoutMetrics(width,height,touch)
-    local small=touch or width<760 or height<640
-    if small then return {Compact=true,Width=math.min(430,width-24),Height=math.min(430,height-32,math.floor(height*.82))} end
-    return {Compact=false,Width=720,Height=570}
-end
-local function place(object,x,y,w,h)
-    object.Position=UDim2.fromOffset(x,y);object.Size=UDim2.fromOffset(w,h)
+render=function()
+    gameSelect.Text=(selectedGame=="All" and "All games" or selectedGame).."  v"
+    local query=search.Text
+    pageTitle.Text=query~="" and "Search results" or selectedTab=="Home" and (selectedGame=="All" and "Home" or selectedGame) or selectedTab
+    local n=0
+    for _,row in ipairs(hub.Rows)do
+        local f=row.Feature
+        row.Card.Visible=matches(f,query,false,game.GameId) and (query~="" or ((selectedGame=="All" or f.Section==selectedGame) and inTab(f)))
+        if row.Card.Visible then n+=1 end
+        local q=snapshot(f);local busy=hub.Busy[f.Id]
+        local unavailable=f.Unavailable or f.PCOnly and not UIS.KeyboardEnabled or f.Game and f.Game~=game.GameId
+        row.Toggle.BackgroundColor3=q.Enabled and C.Accent or C.Line
+        row.Knob.BackgroundColor3=q.Enabled and C.BG or unavailable and C.Muted or C.Text
+        row.Knob.Position=UDim2.fromOffset(q.Enabled and row.OnX or 4,4)
+        row.Label.Text=busy and "…" or unavailable and "N/A" or q.Enabled and "ON" or "OFF"
+        row.Toggle.Active=not unavailable and not busy
+        row.State.Text=busy and "Loading…" or (q.Status or "Off")..(q.Hits and " · "..q.Hits.." hits" or "")
+    end
+    for name,b in pairs(sectionButtons)do
+        b.BackgroundTransparency=selectedTab==name and 0 or 1
+        b.BackgroundColor3=C.Selected;b.TextColor3=selectedTab==name and C.Text or C.Muted
+    end
+    for name,b in pairs(categoryButtons)do b.BackgroundColor3=selectedGame==name and C.Selected or C.Panel end
+    results.Text=(query=="" and "Main Features" or "Search Results").."  ·  "..n
+    empty.Visible=n==0;clearSearch.Visible=query~=""
+    gameMenu.Visible=gamesOpen
+    sidebar.Visible=not compact or drawerOpen
+    sidebar.BackgroundColor3=compact and C.Panel or C.BG
+    sidebar.BackgroundTransparency=compact and 0 or 1
+    sidebar.ZIndex=compact and 30 or 1
+    for _,o in ipairs(sidebar:GetDescendants())do if o:IsA("GuiObject")then o.ZIndex=compact and 31 or 2 end end
+    dismiss.Visible=gamesOpen or compact and drawerOpen
+    footer.Text=note
 end
 local function positionPanel(position)
     local size=availableSize or root.AbsoluteSize
-    panelPosition=Vector2.new(math.clamp(position.X,8,math.max(8,size.X-panelWidth-8)),
-        math.clamp(position.Y,8,math.max(8,size.Y-panelHeight-8)))
+    panelPosition=Vector2.new(math.clamp(position.X,8,math.max(8,size.X-panelWidth-8)),math.clamp(position.Y,8,math.max(8,size.Y-panelHeight-8)))
     window.Position=UDim2.fromOffset(panelPosition.X,panelPosition.Y)
 end
-local function applyLayout(size,touch)
+layout=function()
+    local size=previewSize or root.AbsoluteSize
     if size.X<200 or size.Y<200 then return end
+    if not previewSize and UIS.OnScreenKeyboardVisible and UIS.OnScreenKeyboardPosition.Y>root.AbsolutePosition.Y+200 then
+        size=Vector2.new(size.X,math.min(size.Y,UIS.OnScreenKeyboardPosition.Y-root.AbsolutePosition.Y))
+    end
     availableSize=size
-    local m=layoutMetrics(size.X,size.Y,touch)
-    compact=m.Compact;panelWidth=m.Width;panelHeight=m.Height
-    window.Size=UDim2.fromOffset(panelWidth,panelHeight);scale.Scale=1
-    local w,h=panelWidth,panelHeight
-    local x,y,cw,sh=194,221,506,282
+    compact=previewSize and previewTouch or UIS.TouchEnabled or size.X<760 or size.Y<600
+    local w,h
+    if compact then w=math.min(430,size.X-20);h=math.min(430,size.Y-28,math.floor(size.Y*.9))
+    else w=expanded and math.min(940,size.X-32) or 720;h=expanded and math.min(700,size.Y-32) or 520 end
+    panelWidth,panelHeight=w,h;window.Size=UDim2.fromOffset(w,h)
+    place(header,0,0,w-142,58);place(logo,18,14,30,32)
+    place(title,55,14,w-205,20);place(subtitle,55,34,w-205,16)
+    local control=compact and 38 or 32
+    place(minimize,w-control*3-12,12,control,control);place(maximize,w-control*2-8,12,control,control);place(close,w-control-4,12,control,control)
+    tabsButton.Visible=compact
+    local px,py,pw,ph
     if compact then
-        place(header,0,0,w-112,62);place(badge,12,12,36,36)
-        place(title,60,10,w-180,25);title.TextSize=18
-        place(subtitle,60,35,w-180,16);subtitle.TextSize=9
-        place(hide,w-104,10,42,42);place(close,w-56,10,42,42)
-        place(divider,12,62,w-24,1)
-        place(search,12,74,w-24,44);search.TextSize=14
-        place(clearSearch,w-58,74,44,44)
-        place(gamesMenu,12,128,120,44)
-        place(sectionStrip,144,128,w-156,44)
-        sectionStrip.CanvasSize=UDim2.fromOffset(890,0)
-        for i,name in ipairs({"All","Aim","Movement","Rhythm","Alerts","Combat","Minigames"})do place(sectionButtons[name],(i-1)*128,0,122,44)end
-        place(results,14,182,w-28,18);results.TextSize=11
-        x,y,cw,sh=12,208,w-24,math.max(42,h-262)
-        place(footer,14,h-43,w-28,38);footer.TextSize=10
-        place(sidebar,12,178,230,math.max(72,math.min(418,h-194)))
-        sidebar.CanvasSize=UDim2.fromOffset(0,100+#gameCategories*48);sidebar.ZIndex=30
-        place(dismiss,0,176,w,h-176)
-        place(gamesLabel,14,12,200,20);gamesLabel.TextSize=12
-        for i,name in ipairs(gameCategories)do
-            place(categoryButtons[name],12,42+(i-1)*48,206,44);categoryButtons[name].TextSize=13
-        end
-        place(currentGame,12,54+#gameCategories*48,206,44);currentGame.TextSize=13
-        libraryCount.Visible=false
+        place(gameSelect,12,64,w-116,38);place(tabsButton,w-96,64,84,38)
+        place(sidebar,12,112,190,h-150);place(navCaption,12,8,160,20)
+        px,py,pw,ph=10,112,w-20,h-126
+        place(gameMenu,12,106,230,math.min(300,h-122))
     else
-        place(header,0,0,600,78);place(badge,20,20,38,38)
-        place(title,70,17,280,27);title.TextSize=21
-        place(subtitle,71,44,310,18);subtitle.TextSize=10
-        place(hide,630,24,28,28);place(close,668,24,28,28)
-        place(divider,20,79,680,1)
-        place(search,194,98,506,42);search.TextSize=13
-        place(clearSearch,665,106,27,26)
-        place(sectionStrip,194,153,506,28)
-        for i,name in ipairs({"All","Aim","Movement","Rhythm","Alerts","Combat","Minigames"})do place(sectionButtons[name],(i-1)*128,0,122,28)end
-        place(results,196,193,498,17);results.TextSize=10
-        place(footer,196,520,498,32);footer.TextSize=10
-        place(sidebar,20,98,154,452);sidebar.CanvasSize=UDim2.fromOffset(0,130+#gameCategories*43);sidebar.ZIndex=1
-        place(gamesLabel,14,16,120,18);gamesLabel.TextSize=10
-        for i,name in ipairs(gameCategories)do
-            place(categoryButtons[name],10,47+(i-1)*43,134,34);categoryButtons[name].TextSize=12
-        end
-        place(currentGame,10,59+#gameCategories*43,134,32);currentGame.TextSize=12
-        place(libraryCount,14,104+#gameCategories*43,126,18);libraryCount.Visible=true
+        place(gameSelect,14,76,186,36);place(sidebar,10,126,194,h-164);place(navCaption,12,4,165,20)
+        px,py,pw,ph=214,70,w-228,h-106
+        place(gameMenu,14,116,230,math.min(330,h-132))
     end
-    for _,object in ipairs(sidebar:GetDescendants())do if object:IsA("GuiObject")then object.ZIndex=compact and 31 or 2 end end
-    local tight=compact and h<300
-    if tight then
-        drawerOpen=false
-        place(results,14,126,w-28,18)
-        y=150;sh=math.max(12,h-204)
-    end
-    sectionStrip.Visible=not tight
-    gamesMenu.Visible=compact and not tight
-    place(scroll,x,y,cw,sh);scroll.ScrollBarThickness=compact and 5 or 3
-    place(empty,x+12,y+12,cw-24,math.min(sh-12,70))
+    for index,b in ipairs(navButtons)do place(b,4,32+(index-1)*44,compact and 180 or 186,38)end
+    place(panel,px,py,pw,ph)
+    place(pageIcon,16,11,22,26);place(pageTitle,44,11,pw-60,26);place(pageLine,0,47,pw,1)
+    place(search,14,60,pw-28,36);place(clearSearch,pw-46,62,30,32)
+    place(results,16,105,pw-32,20)
+    place(scroll,14,135,pw-24,math.max(12,ph-145));place(empty,20,135,pw-40,50)
+    place(footer,16,h-28,w-32,18)
+    results.Visible=not compact
+    if compact then
+        place(pageIcon,12,7,22,24);place(pageTitle,38,7,pw-50,24);place(pageLine,0,37,pw,1)
+        place(search,12,46,pw-24,32);place(clearSearch,pw-44,46,30,32)
+        place(scroll,12,90,pw-22,math.max(12,ph-98));place(empty,18,90,pw-36,40)
+        place(footer,16,h-13,w-32,12);footer.TextSize=9
+    else footer.TextSize=10 end
+    local cw=pw-30
     for _,row in ipairs(hub.Rows)do
-        row.Card.Size=UDim2.new(1,-7,0,compact and 140 or 116)
-        local content=cw-7
-        place(row.GameLabel,15,9,content-110,18);row.GameLabel.TextSize=compact and 11 or 10
-        place(row.Title,15,31,content-112,24);row.Title.TextSize=16
-        place(row.Description,15,compact and 61 or 55,content-112,compact and 40 or 26);row.Description.TextSize=compact and 12 or 10
-        place(row.State,15,compact and 114 or 89,content-30,17);row.State.TextSize=compact and 11 or 10
-        place(row.Label,content-84,24,68,17)
-        place(row.Toggle,content-84,49,compact and 68 or 64,compact and 44 or 30)
-        row.Knob.Size=UDim2.fromOffset(compact and 28 or 22,compact and 28 or 22)
-        row.OffX=compact and 8 or 4;row.OnX=compact and 32 or 38;row.KnobY=compact and 8 or 4
+        local rh=compact and 110 or 104
+        row.Card.Size=UDim2.new(1,-6,0,rh)
+        place(row.Title,14,9,cw-88,compact and 34 or 34);row.Title.TextSize=compact and 14 or 16
+        place(row.Description,14,compact and 45 or 44,cw-90,compact and 30 or 30);row.Description.TextSize=compact and 11 or 12
+        place(row.State,14,rh-23,cw-28,16)
+        local sw,sh=compact and 56 or 48,compact and 44 or 28
+        place(row.Toggle,cw-sw-12,compact and 43 or 40,sw,sh);place(row.Label,cw-sw-12,17,sw,15)
+        row.Knob.Size=UDim2.fromOffset(sh-8,sh-8);row.OnX=sw-sh+4
     end
     positionPanel(panelPosition or Vector2.new((size.X-w)/2,(size.Y-h)/2))
     render()
 end
-local function fit()
-    local size=root.AbsoluteSize
-    if UIS.OnScreenKeyboardVisible and UIS.OnScreenKeyboardPosition.Y>root.AbsolutePosition.Y+200 then
-        size=Vector2.new(size.X,math.min(size.Y,UIS.OnScreenKeyboardPosition.Y-root.AbsolutePosition.Y))
-    end
-    applyLayout(size,UIS.TouchEnabled)
-end
+connect(search:GetPropertyChangedSignal("Text"),function()scroll.CanvasPosition=Vector2.zero;render()end)
+connect(clearSearch.Activated,function()search.Text="";search:ReleaseFocus()end)
+connect(gameSelect.Activated,function()gamesOpen=not gamesOpen;drawerOpen=false;render()end)
+connect(tabsButton.Activated,function()drawerOpen=not drawerOpen;gamesOpen=false;render()end)
+connect(dismiss.Activated,function()drawerOpen=false;gamesOpen=false;render()end)
+connect(minimize.Activated,function()window.Visible=false end)
+connect(maximize.Activated,function()expanded=not expanded;panelPosition=nil;layout()end)
+connect(close.Activated,function()hub:Destroy()end)
+connect(launcher.Activated,function()window.Visible=not window.Visible end)
 local drag
 connect(header.InputBegan,function(input)
     if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
-        drag={Input=input,Start=input.Position,Position=panelPosition or (window.AbsolutePosition-root.AbsolutePosition)}
+        drag={Input=input,Start=input.Position,Position=panelPosition or Vector2.zero}
     end
 end)
 connect(UIS.InputChanged,function(input)
     if drag and (input==drag.Input or drag.Input.UserInputType==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseMovement)then
-        local d=input.Position-drag.Start
-        positionPanel(drag.Position+Vector2.new(d.X,d.Y))
+        local d=input.Position-drag.Start;positionPanel(drag.Position+Vector2.new(d.X,d.Y))
     end
 end)
 connect(UIS.InputEnded,function(input)
-    if drag and (drag.Input==input or drag.Input.UserInputType==Enum.UserInputType.MouseButton1
-        and input.UserInputType==Enum.UserInputType.MouseButton1)then drag=nil end
+    if drag and (input==drag.Input or input.UserInputType==Enum.UserInputType.MouseButton1 and drag.Input.UserInputType==Enum.UserInputType.MouseButton1)then drag=nil end
 end)
 connect(UIS.WindowFocusReleased,function()drag=nil end)
-connect(hide.Activated,function()window.Visible=false end)
-connect(launcher.Activated,function()window.Visible=not window.Visible end)
 connect(UIS.InputBegan,function(input,processed)
-    if processed or UIS:GetFocusedTextBox() then return end
+    if processed or UIS:GetFocusedTextBox()then return end
     if input.KeyCode==Enum.KeyCode.RightShift then window.Visible=not window.Visible
     elseif input.KeyCode==Enum.KeyCode.C and UIS.KeyboardEnabled then
-        for _,feature in ipairs(features)do if feature.Id=="camera" then change(feature);break end end
+        for _,f in ipairs(features)do if f.Id=="camera" then change(f);break end end
     end
 end)
 function hub:Destroy()
     if self.Destroyed then return end
     self.Destroyed=true
-    for _,connection in ipairs(self.Connections)do connection:Disconnect()end
-    for _,controller in pairs(self.Controllers)do if not controller.Destroyed then pcall(controller.Destroy,controller)end end
+    for _,c in ipairs(self.Connections)do c:Disconnect()end
+    for _,c in pairs(self.Controllers)do if not c.Destroyed then pcall(c.Destroy,c)end end
     if ffFolder then ffFolder:Destroy();ffFolder=nil end
     gui:Destroy()
     if env.__ALLEN_GENERAL_HUB==self then env.__ALLEN_GENERAL_HUB=nil end
 end
-connect(close.Activated,function()hub:Destroy()end)
--- Do not inherit enabled camera, movement or tug controllers from earlier executions.
-for _,feature in ipairs(features)do
-    if feature.Key then
-        local controller=env[feature.Key]
-        if controller and type(controller.Destroy)=="function" then
-            pcall(controller.Destroy,controller)
-        end
-    end
+for _,f in ipairs(features)do
+    local c=f.Key and env[f.Key]
+    if c and type(c.Destroy)=="function" then pcall(c.Destroy,c)end
 end
 if game.GameId==FF and type(run_on_actor)=="function" then
     local actor=LP:WaitForChild("PlayerScripts"):FindFirstChild("ClientActor")
-    if actor then
-        run_on_actor(actor,[[local s=getgenv().__FF_AUTOPLAY;if s and not s.Destroyed then s:Destroy()end]])
-    end
+    if actor then run_on_actor(actor,[[local s=getgenv().__FF_AUTOPLAY;if s and not s.Destroyed then s:Destroy()end]])end
 end
 env.__ALLEN_GENERAL_HUB=hub
-hub.Features=features
-hub.Search=search
-hub.Matches=matches
-hub.CategoryButtons=categoryButtons
-hub.SectionButtons=sectionButtons
-hub.PreviewLayout=function(_,width,height)applyLayout(Vector2.new(width,height),true)end
-hub.RestoreLayout=fit
-hub.GetFeatureSnapshot=function(_,id)for _,feature in ipairs(features)do if feature.Id==id then return snapshot(feature)end end end
-task.defer(fit)
-render()
+hub.Features=features;hub.Search=search;hub.Matches=matches;hub.CategoryButtons=categoryButtons;hub.SectionButtons=sectionButtons
+hub.SelectGame=function(_,name)chooseGame(name)end
+hub.SelectTab=function(_,name)if sectionButtons[name]then selectedTab=name;search.Text="";scroll.CanvasPosition=Vector2.zero;render()end end
+hub.PreviewLayout=function(_,width,height)previewSize=Vector2.new(width,height);previewTouch=true;panelPosition=nil;layout()end
+hub.RestoreLayout=function()previewSize=nil;previewTouch=nil;panelPosition=nil;layout()end
+hub.GetFeatureSnapshot=function(_,id)for _,f in ipairs(features)do if f.Id==id then return snapshot(f)end end end
+buildNavigation();layout()
+task.defer(layout)
 task.spawn(function()
-    local view,keyboard
+    local size,keyboard
     while not hub.Destroyed do
         if window.Visible then render()end
-        if root.AbsoluteSize~=view or keyboard~=UIS.OnScreenKeyboardVisible then view=root.AbsoluteSize;keyboard=UIS.OnScreenKeyboardVisible;fit()end
+        if root.AbsoluteSize~=size or keyboard~=UIS.OnScreenKeyboardVisible then size=root.AbsoluteSize;keyboard=UIS.OnScreenKeyboardVisible;layout()end
         task.wait(.25)
     end
 end)
-print("[Allen Scripts] General hub loaded; features OFF.")
-
-
+print("[Allen Scripts] Black tabbed hub loaded; features OFF.")
 
