@@ -5,6 +5,9 @@ RLGL=[====[
 -- Read-only light events; no outgoing remotes, raw keypresses or map indexing.
 local Policy=(function()
 local Policy={}
+function Policy.InFinishZone(progress,lateral,height,halfDepth,halfWidth)
+    return progress>=halfDepth+.15 and math.abs(lateral)<=halfWidth+3 and math.abs(height)<=20
+end
 function Policy.Light(packet)
     if type(packet)~="table" or packet.EffectName~="TrafficLight" then return nil end
     if packet.Over then return "over" end
@@ -50,7 +53,30 @@ local function finished()
     if not current or current.Value~="RedLightGreenLight" then return false end
     local c=LP.Character
     if not c then return false end
-    if c:FindFirstChild("ReachedEnd") then State.FinishedCharacter=c end
+    if c:FindFirstChild("ReachedEnd") then State.FinishedCharacter=c;State.FinishSource="ReachedEnd" end
+    if State.FinishedCharacter~=c then
+        local r=c:FindFirstChild("HumanoidRootPart")
+        local map=workspace:FindFirstChild("RedLightGreenLight")
+        local sand=map and map:FindFirstChild("sand")
+        local line=sand and sand:FindFirstChild("crossedover")
+        local start=sand and sand:FindFirstChild("startingcrossedover")
+        if r and line and start and line:IsA("BasePart") and start:IsA("BasePart") then
+            local delta=line.Position-start.Position
+            local forward=Vector3.new(delta.X,0,delta.Z)
+            if forward.Magnitude>10 then
+                forward=forward.Unit
+                local right=forward:Cross(Vector3.yAxis)
+                local relative=r.Position-line.Position
+                local halfDepth=(math.abs(line.CFrame.RightVector:Dot(forward))*line.Size.X
+                    +math.abs(line.CFrame.LookVector:Dot(forward))*line.Size.Z)*.5
+                local halfWidth=(math.abs(line.CFrame.RightVector:Dot(right))*line.Size.X
+                    +math.abs(line.CFrame.LookVector:Dot(right))*line.Size.Z)*.5
+                if Policy.InFinishZone(relative:Dot(forward),relative:Dot(right),relative.Y,halfDepth,halfWidth) then
+                    State.FinishedCharacter=c;State.FinishSource="sand.crossedover"
+                end
+            end
+        end
+    end
     return State.FinishedCharacter==c
 end
 local function active()
@@ -146,7 +172,7 @@ function State:SetEnabled(value)
     end
 end
 function State:GetSnapshot()
-    return {Enabled=self.Enabled,Status=self.Status,Light=self.Light,Stops=self.Stops,Signal=self.Source,Finished=finished()}
+    return {Enabled=self.Enabled,Status=self.Status,Light=self.Light,Stops=self.Stops,Signal=self.Source,Finished=finished(),FinishSource=self.FinishSource}
 end
 function State:Destroy()
     if self.Destroyed then return end
@@ -170,7 +196,7 @@ local function watchCharacter(c)
         local values=workspace:FindFirstChild("Values")
         local current=values and values:FindFirstChild("CurrentGame")
         if child.Name=="ReachedEnd" and current and current.Value=="RedLightGreenLight" then
-            State.FinishedCharacter=c;release()
+            State.FinishedCharacter=c;State.FinishSource="ReachedEnd";release()
             if State.Enabled then State.Status="Finish reached · free movement" end
         end
     end)
@@ -178,7 +204,7 @@ end
 watchCharacter(LP.Character)
 connect(LP.CharacterAdded,function(c)
     release();State.Light="unknown";image=nil
-    State.FinishedCharacter=nil;watchCharacter(c)
+    State.FinishedCharacter=nil;State.FinishSource=nil;watchCharacter(c)
     if imageConnection then imageConnection:Disconnect();imageConnection=nil end
 end)
 local values=workspace:FindFirstChild("Values")
@@ -186,6 +212,7 @@ local current=values and values:FindFirstChild("CurrentGame")
 if current then connect(current.Changed,function()
     release();State.Light="unknown";image=nil
     State.FinishedCharacter=nil
+    State.FinishSource=nil
 end) end
 RunService:BindToRenderStep(renderName,Enum.RenderPriority.Input.Value+1,function(dt)
     if State.Destroyed or not State.Enabled then return end
