@@ -8,6 +8,15 @@ local RS=game:GetService("ReplicatedStorage")
 local RunService=game:GetService("RunService")
 local Pathfinding=game:GetService("PathfindingService")
 local env=getgenv()
+local KnifePolicy=(function()
+local Policy={}
+function Policy.InAttackArc(distance,forward,lateral,height,range)
+    return distance>.05 and distance<=range and forward>0 and forward/distance>=.8
+        and math.abs(lateral)<=3.5 and math.abs(height)<=5
+end
+return Policy
+
+end)()
 local M=env.__ALLEN_HNS_MANAGER
 if not M or M.Destroyed then
     M={Controllers={},Generation=0,Connections={},Animators={},Targets={},Doors={},Exits={},Keys={},Stairs={},Spikes={},
@@ -176,6 +185,23 @@ if not M or M.Destroyed then
         end)
     end
     local ensureToolInterface
+    local function aimedKnifeThreat(attacker)
+        local threat=M.Threats[attacker]
+        if type(threat)~="table" or threat.Expires<=os.clock() or not threat.Track.IsPlaying
+            or threat.Character~=attacker.Character or not hunter(attacker)then return false end
+        local c,_,other=live(attacker);local _,_,r=live(LP)
+        if not c or not r or not c:FindFirstChild("Knife")then return false end
+        local offset=r.Position-other.Position
+        local flat=Vector3.new(offset.X,0,offset.Z)
+        local look=Vector3.new(other.CFrame.LookVector.X,0,other.CFrame.LookVector.Z)
+        if look.Magnitude<.1 then return false end;look=look.Unit
+        local right=look:Cross(Vector3.yAxis)
+        if not KnifePolicy.InAttackArc(flat.Magnitude,flat:Dot(look),flat:Dot(right),offset.Y,threat.Range)then return false end
+        local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances={workspace:FindFirstChild("Live") or c,LP.Character}
+        params.IgnoreWater=true;params.RespectCanCollide=true
+        return workspace:Raycast(other.Position,offset,params)==nil
+    end
     local function onCooldown(c,tool)
         for _,child in ipairs(c:GetChildren())do
             if not child:IsA("Tool")then
@@ -187,6 +213,7 @@ if not M or M.Destroyed then
     end
     local function evade(attacker)
         if not enabled("dodge") or os.clock()-M.LastDodge<.55 then return end
+        if not aimedKnifeThreat(attacker)then return end
         local c,h,r=live(LP);local _,_,other=live(attacker)
         if not r or not other or c:FindFirstChild("Ragdoll") or c:FindFirstChild("DisableMovement")then return end
         local bag=LP:FindFirstChildOfClass("Backpack")
@@ -213,6 +240,9 @@ if not M or M.Destroyed then
         local generation=M.Generation
         task.delay(.04,function()
             if generation~=M.Generation or not enabled("dodge") or not active()then return end
+            if not aimedKnifeThreat(attacker)then
+                M.EvadeUntil=nil;restoreEquipment();M.Controllers.dodge.Status="Knife threat no longer aimed at you";return
+            end
             if c~=LP.Character then return end
             if tool.Parent~=c then M.Controllers.dodge.Status="Waiting for DODGE! equip";return end
             if onCooldown(c,tool)then M.Controllers.dodge.Status="DODGE! cooldown";return end
@@ -237,10 +267,11 @@ if not M or M.Destroyed then
                     if animator and not M.Animators[animator]then
                         M.Animators[animator]=animator.AnimationPlayed:Connect(function(track)
                             local id=track.Animation and track.Animation.AnimationId:match("%d+")
-                            if enabled("dodge") and M.AttackIds and M.AttackIds[id]then
-                                M.Threats[p]=os.clock()+.65
-                                local _,_,localRoot=live(LP)
-                                if localRoot and (r.Position-localRoot.Position).Magnitude<18 then evade(p)end
+                            local profile=M.AttackIds and M.AttackIds[id]
+                            if enabled("dodge") and profile then
+                                M.Threats[p]={Track=track,Character=c,Range=profile.Range,
+                                    Expires=os.clock()+math.clamp(.6/math.max(.2,track.Speed),.2,.9)}
+                                evade(p)
                             end
                         end)
                     end
@@ -261,7 +292,8 @@ if not M or M.Destroyed then
         local knife=a and a:FindFirstChild("Knife")
         if knife then for _,v in ipairs(knife:GetDescendants())do
             if v:IsA("Animation") and (v.Name:lower():find("swing") or v.Name:lower():find("stab") or v.Name:lower():find("slash"))then
-                local id=v.AnimationId:match("%d+");if id then M.AttackIds[id]=true end
+                local id=v.AnimationId:match("%d+")
+                if id then M.AttackIds[id]={Range=v.Name:lower():find("lunge",1,true) and 14 or 8}end
             end
         end end
     end
@@ -401,15 +433,11 @@ if not M or M.Destroyed then
         peers();spikes();hitboxes()
         if not r then return end
         if enabled("dodge")then
-            for _,p in ipairs(Players:GetPlayers())do if p~=LP and hunter(p)then
-                local other,_,oroot=live(p)
-                if oroot and other:FindFirstChild("Knife")then
-                    local delta=r.Position-oroot.Position;local d=delta.Magnitude
-                    local closing=d>.1 and (oroot.AssemblyLinearVelocity-r.AssemblyLinearVelocity):Dot(delta.Unit) or 0
-                    if d<18 and ((self.Threats[p] or 0)>os.clock() or d<12 and closing>15 and oroot.CFrame.LookVector:Dot(delta.Unit)>.25)then evade(p)end
-                end
-            end end
-            if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife swings and dash approaches"end
+            for attacker,threat in pairs(self.Threats)do
+                if threat.Expires<=os.clock() or not threat.Track.IsPlaying then self.Threats[attacker]=nil
+                elseif aimedKnifeThreat(attacker)then evade(attacker)end
+            end
+            if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife animations aimed at you"end
         end
         knife()
         local collecting=collect()
