@@ -33,6 +33,7 @@ local State={HubOnly=true,Enabled=false,Destroyed=false,Connections={},Light="un
 local renderName="AllenRLGL_"..HttpService:GenerateGUID(false)
 local managing=false
 local image,imageConnection
+local characterConnection
 local checkElapsed=0
 local function connect(signal,callback)
     local c=signal:Connect(callback);table.insert(State.Connections,c);return c
@@ -43,9 +44,19 @@ local function character()
     local r=c and c:FindFirstChild("HumanoidRootPart")
     if c and h and r and h.Health>0 and not c:FindFirstChild("Dead") then return c,h,r end
 end
+local function finished()
+    local values=workspace:FindFirstChild("Values")
+    local current=values and values:FindFirstChild("CurrentGame")
+    if not current or current.Value~="RedLightGreenLight" then return false end
+    local c=LP.Character
+    if not c then return false end
+    if c:FindFirstChild("ReachedEnd") then State.FinishedCharacter=c end
+    return State.FinishedCharacter==c
+end
 local function active()
     if not State.Enabled or State.Light=="over" or LP:GetAttribute("IsGuard") then return false end
     if workspace:GetAttribute("RLGLOVER") then return false end
+    if finished() then return false end
     local values=workspace:FindFirstChild("Values")
     local current=values and values:FindFirstChild("CurrentGame")
     local started=values and values:FindFirstChild("GameStarted")
@@ -105,7 +116,7 @@ end
 local function step()
     if not active() then
         release()
-        State.Status=State.Enabled and (State.Light=="over" and "Round ended" or "Waiting for Red Light, Green Light") or "Off"
+        State.Status=State.Enabled and (finished() and "Finish reached · free movement" or State.Light=="over" and "Round ended" or "Waiting for Red Light, Green Light") or "Off"
         return
     end
     local c,h,r=character()
@@ -135,12 +146,13 @@ function State:SetEnabled(value)
     end
 end
 function State:GetSnapshot()
-    return {Enabled=self.Enabled,Status=self.Status,Light=self.Light,Stops=self.Stops,Signal=self.Source}
+    return {Enabled=self.Enabled,Status=self.Status,Light=self.Light,Stops=self.Stops,Signal=self.Source,Finished=finished()}
 end
 function State:Destroy()
     if self.Destroyed then return end
     self:SetEnabled(false);self.Destroyed=true
     RunService:UnbindFromRenderStep(renderName)
+    if characterConnection then characterConnection:Disconnect();characterConnection=nil end
     for _,c in ipairs(self.Connections) do c:Disconnect() end
     table.clear(self.Connections)
     if env.__ALLEN_INK_RLGL==self then env.__ALLEN_INK_RLGL=nil end
@@ -151,14 +163,29 @@ assert(effect and effect:IsA("RemoteEvent"),"Native traffic-light event is unava
 connect(effect.OnClientEvent,function(packet)
     if State.Enabled then setLight(Policy.Light(packet),"Native TrafficLight event") end
 end)
-connect(LP.CharacterAdded,function()
+local function watchCharacter(c)
+    if characterConnection then characterConnection:Disconnect();characterConnection=nil end
+    if not c then return end
+    characterConnection=c.ChildAdded:Connect(function(child)
+        local values=workspace:FindFirstChild("Values")
+        local current=values and values:FindFirstChild("CurrentGame")
+        if child.Name=="ReachedEnd" and current and current.Value=="RedLightGreenLight" then
+            State.FinishedCharacter=c;release()
+            if State.Enabled then State.Status="Finish reached · free movement" end
+        end
+    end)
+end
+watchCharacter(LP.Character)
+connect(LP.CharacterAdded,function(c)
     release();State.Light="unknown";image=nil
+    State.FinishedCharacter=nil;watchCharacter(c)
     if imageConnection then imageConnection:Disconnect();imageConnection=nil end
 end)
 local values=workspace:FindFirstChild("Values")
 local current=values and values:FindFirstChild("CurrentGame")
 if current then connect(current.Changed,function()
     release();State.Light="unknown";image=nil
+    State.FinishedCharacter=nil
 end) end
 RunService:BindToRenderStep(renderName,Enum.RenderPriority.Input.Value+1,function(dt)
     if State.Destroyed or not State.Enabled then return end
@@ -15783,7 +15810,7 @@ local features={
     {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
     {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="PC only · C to lock/unlock · red highlight",Badge="PC only",PCOnly=true,Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Auto Dodge",Subtitle="Uses available dash · native movement",Badge="Ink Game",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
-    {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · automatically stops on red",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
+    {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · stops on red until finish",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
     {Id="ff",Section="Funky Friday",Category="Rhythm",Name="Auto Play",Subtitle="Taps, holds and chords · native lane timing",Badge="Funky Friday",Game=FF},
     {Id="duels",Section="Funky Duels",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · skips hurt notes",Badge="Funky Duels",Game=DUELS,Key="__FUNKY_DUELS_AUTOPLAY",Source="Duels"},
     {Id="mmm",Section="Monday Morning Misery",Category="Rhythm",Name="Auto Play",Subtitle="Native taps and holds · local lanes",Badge="Monday Morning Misery",Game=MMM,Key="__MMM_AUTOPLAY",Source="MMM"},
