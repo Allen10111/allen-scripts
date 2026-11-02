@@ -7,6 +7,8 @@ local LP=Players.LocalPlayer
 local RS=game:GetService("ReplicatedStorage")
 local RunService=game:GetService("RunService")
 local Pathfinding=game:GetService("PathfindingService")
+local validModes={exits=true,doors=true,players=true,keys=true,stairs=true,spikes=true,collect=true,dodge=true,stamina=true,follow=true,hitboxes=true,teleport=true,disablespikes=true}
+assert(validModes[MODE],"Unsupported Hide & Seek feature")
 local env=getgenv()
 local KnifePolicy=(function()
 local Policy={}
@@ -20,7 +22,7 @@ end)()
 local M=env.__ALLEN_HNS_MANAGER
 if not M or M.Destroyed then
     M={Controllers={},Generation=0,Connections={},Animators={},Targets={},Doors={},Exits={},Keys={},Stairs={},Spikes={},
-        Originals={},Covers={},Elapsed=0,RouteClock=0,Threats={},LastAttack=0,LastDodge=0,NextPeers=0}
+        Originals={},Covers={},Elapsed=0,RouteClock=0,Threats={},LastDodge=0,NextPeers=0}
     env.__ALLEN_HNS_MANAGER=M
     local colors={Blue=Color3.fromRGB(65,155,255),Red=Color3.fromRGB(255,65,75),Green=Color3.fromRGB(70,235,135),
         Yellow=Color3.fromRGB(255,205,65),White=Color3.fromRGB(220,220,230)}
@@ -305,37 +307,6 @@ if not M or M.Destroyed then
         M.ToolRemote=require(modules:FindFirstChild("RemoteWrapper"))(remotes:FindFirstChild("UsedTool"))
         assert(type(M.Shared.GetMoveExtraOptions)=="function" and M.ToolRemote,"Native tool interface is unavailable")
     end
-    local function knife()
-        if not enabled("knife")then return end
-        local s=M.Controllers.knife
-        if not hunter(LP)then s.Status="Seeker role required";return end
-        local c,h,r=live(LP);if not r then return end
-        if M.DodgeItemUntil and os.clock()<M.DodgeItemUntil then return end
-        if c:FindFirstChild("Ragdoll") or c:FindFirstChild("DisableTools")then s.Status="Waiting for combat recovery";return end
-        local tool=c:FindFirstChild("Knife")
-        if not tool then
-            local bag=LP:FindFirstChildOfClass("Backpack");tool=bag and bag:FindFirstChild("Knife")
-            if tool and tool:IsA("Tool")then h:EquipTool(tool)end
-            s.Status="Waiting for equipped Knife";return
-        end
-        if not tool:IsA("Tool")then s.Status="Native Knife tool unavailable";return end
-        if onCooldown(c,tool)then s.Status="Knife cooldown";return end
-        local target,distance=nearest(hider,8)
-        if not target then s.Status="Waiting for nearby hider";return end
-        if os.clock()-M.LastAttack<.6 then return end
-        ensureToolInterface()
-        if M.Shared.CheckIfStunned(c)then return end
-        local _,_,other=live(target)
-        local point=other and Vector3.new(other.Position.X,r.Position.Y,other.Position.Z)
-        if not point or (point-r.Position).Magnitude<.1 then return end
-        local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances={workspace:FindFirstChild("Live") or c};params.IgnoreWater=true
-        if workspace:Raycast(r.Position,other.Position-r.Position,params)then s.Status="Target behind a wall";return end
-        r.CFrame=CFrame.lookAt(r.Position,point)
-        local options=M.Shared.GetMoveExtraOptions(c,tool,{Clicked=true,IsRunning=false})
-        M.LastAttack=os.clock();M.ToolRemote:FireServer("UsingMoveCustom",tool,nil,options)
-        s.Actions+=1;s.Status="Knife request · "..target.DisplayName
-    end
     local function spikes()
         if not enabled("disablespikes")then
             restore("disablespikes");for object,cover in pairs(M.Covers)do cover:Destroy();M.Covers[object]=nil end;return
@@ -439,7 +410,6 @@ if not M or M.Destroyed then
             end
             if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife animations aimed at you"end
         end
-        knife()
         local collecting=collect()
         if not collecting and enabled("follow")then
             local target=nearest(hider,180)
