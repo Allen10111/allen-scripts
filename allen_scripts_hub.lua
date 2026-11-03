@@ -17755,9 +17755,16 @@ assert(validModes[MODE],"Unsupported Hide & Seek feature")
 local env=getgenv()
 local KnifePolicy=(function()
 local Policy={}
-function Policy.InAttackArc(distance,forward,lateral,height,range)
-    return distance>.05 and distance<=range and forward>0 and forward/distance>=.8
-        and math.abs(lateral)<=3.5 and math.abs(height)<=5
+-- Estimated knife volume: exact caller-supplied HitboxSize/CFrameOffset is unavailable.
+function Policy.InAttackBox(forward,lateral,height,range)
+    return forward>0 and forward<=range and math.abs(lateral)<=3.5 and math.abs(height)<=5
+end
+function Policy.Prediction(x,z)
+    if x~=x or z~=z or math.abs(x)==math.huge or math.abs(z)==math.huge then return 0,0 end
+    x*=.1;z*=.1
+    local length=math.sqrt(x*x+z*z)
+    if length>10 then x=x/length*10;z=z/length*10 end
+    return x,z
 end
 return Policy
 
@@ -17942,7 +17949,19 @@ if not M or M.Destroyed then
         local look=Vector3.new(other.CFrame.LookVector.X,0,other.CFrame.LookVector.Z)
         if look.Magnitude<.1 then return false end;look=look.Unit
         local right=look:Cross(Vector3.yAxis)
-        if not KnifePolicy.InAttackArc(flat.Magnitude,flat:Dot(look),flat:Dot(right),offset.Y,threat.Range)then return false end
+        local function intersects(delta)
+            local relative=flat-delta
+            return KnifePolicy.InAttackBox(relative:Dot(look),relative:Dot(right),offset.Y,threat.Range)
+        end
+        local threatening=intersects(Vector3.zero)
+        -- HB's optional velocity prediction: horizontal velocity * .1, capped at 10 studs.
+        -- We cannot observe the server caller's option, so this remains predictive geometry.
+        if not threatening and not attacker:GetAttribute("NoHitboxPredict")then
+            local velocity=other.AssemblyLinearVelocity
+            local x,z=KnifePolicy.Prediction(velocity.X,velocity.Z)
+            threatening=intersects(Vector3.new(x,0,z))
+        end
+        if not threatening then return false end
         local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances={workspace:FindFirstChild("Live") or c,LP.Character}
         params.IgnoreWater=true;params.RespectCanCollide=true
@@ -18057,7 +18076,7 @@ if not M or M.Destroyed then
         local a=RS:FindFirstChild("Animations");a=a and a:FindFirstChild("Abilities")
         local knife=a and a:FindFirstChild("Knife")
         if knife then for _,v in ipairs(knife:GetDescendants())do
-            if v:IsA("Animation") and (v.Name:lower():find("swing") or v.Name:lower():find("stab") or v.Name:lower():find("slash"))then
+            if v:IsA("Animation") and not v.Name:lower():find("victim",1,true) and (v.Name:lower():find("swing") or v.Name:lower():find("stab") or v.Name:lower():find("slash"))then
                 local id=v.AnimationId:match("%d+")
                 if id then M.AttackIds[id]={Range=v.Name:lower():find("lunge",1,true) and 14 or 8}end
             end
@@ -18197,7 +18216,7 @@ if not M or M.Destroyed then
                 if threat.Expires<=os.clock() or not threat.Track.IsPlaying then self.Threats[attacker]=nil
                 elseif aimedKnifeThreat(attacker)then evade(attacker)end
             end
-            if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife animations aimed at you"end
+            if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife animations + predicted attack box"end
         end
         local collecting=collect()
         if not collecting and enabled("follow")then
