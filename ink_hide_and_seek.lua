@@ -9,6 +9,7 @@ local RunService=game:GetService("RunService")
 local Pathfinding=game:GetService("PathfindingService")
 local validModes={exits=true,doors=true,players=true,keys=true,stairs=true,spikes=true,collect=true,dodge=true,stamina=true,follow=true,hitboxes=true,teleport=true,disablespikes=true}
 assert(validModes[MODE],"Unsupported Hide & Seek feature")
+assert(MODE~="dodge","DODGE! is disabled while investigating crash and timeout reports")
 local env=getgenv()
 local KnifePolicy=(function()
 local Policy={}
