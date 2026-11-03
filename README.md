@@ -46,3 +46,5 @@ The mobile window is capped at 430 by 430 pixels and adapts to portrait and land
 
 `ink_auto_dodge.lua` is the button-free native dodge engine for PC and mobile. It starts OFF and is controlled by the hub switch. It creates no standalone GUI or hotkeys. Requires a supported executor and an available native dash.
 
+- Jump Rope Auto Jump: learns the native Effects.rope HitOff phase and tracks CurrentCF angular velocity, then requests normal Humanoid jumps about 0.22 seconds before the estimated next pass. First pass must be handled manually. Only active in JumpRope with PlayingJumpRope and JumpRopeZone, grounded and not stunned/ragdolled. No direct remote calls, rope edits, movement automation, balance assistance or hanging recovery. Starts OFF. Local timing math and compilation passed; live jump effectiveness and mobile behavior are unverified.
+
