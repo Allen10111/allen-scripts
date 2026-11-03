@@ -60,3 +60,5 @@ Isolated live test (2026-11-02): 60-second monitored run on asdfaq443 completed 
 
 Mobile closure report: isolated DODGE! is now PC-only and explicitly blocked when TouchEnabled is true, both in the hub and at engine entry. PC testing does not establish mobile compatibility. The mobile closure cause remains unconfirmed; no further mobile input tests were run.
 
+Build R4 replaces all Dodge input simulation with one validated native hotbar MouseButton1Down callback per swing. It selects the callback by the native backpack closure structure (inventory flag, drag function, exact slot, character, backpack, use function), refuses unknown/multiple handlers and does not invoke arbitrary connected callbacks. No direct tool remote is sent by this controller; the game native handler handles its normal server request. Keyboard/touch simulation APIs are absent from this replacement. Native callback structure was verified on the connected PC. Android + Delta behavior remains unverified and exact mobile closure cause is not established. Earlier R3 input-disabled notice describes that prior build only.
+
