@@ -58,3 +58,5 @@ Isolated DODGE! replacement: the Hide & Seek Dodge row now uses a separate small
 
 Isolated live test (2026-11-02): 60-second monitored run on asdfaq443 completed with six single-key attempts, native cooldown observations, no logged health decreases and no script errors or disconnect during the window. Maximum measured controller step was 1.826 ms. This does not prove crash resolution or exact hitbox timing. A follow-up status-only change latches short-lived cooldown observations instead of checking only after 0.4 seconds. The controller was automatically turned OFF after the run.
 
+Mobile closure report: isolated DODGE! is now PC-only and explicitly blocked when TouchEnabled is true, both in the hub and at engine entry. PC testing does not establish mobile compatibility. The mobile closure cause remains unconfirmed; no further mobile input tests were run.
+
