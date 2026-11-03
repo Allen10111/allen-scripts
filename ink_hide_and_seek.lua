@@ -241,18 +241,22 @@ if not M or M.Destroyed then
     local function evade(attacker)
         if not enabled("dodge") or os.clock()-M.LastDodge<.55 then return end
         if not aimedKnifeThreat(attacker)then return end
+        local threat=M.Threats[attacker]
+        if not threat or threat.Attempted then return end
         local c,h,r=live(LP);local _,_,other=live(attacker)
         if not r or not other or c:FindFirstChild("Ragdoll") or c:FindFirstChild("DisableMovement")then return end
         local bag=LP:FindFirstChildOfClass("Backpack")
         local tool=c:FindFirstChild("DODGE!") or bag and bag:FindFirstChild("DODGE!")
         if not tool or not tool:IsA("Tool")then M.Controllers.dodge.Status="DODGE! item required";return end
         if onCooldown(c,tool)then M.Controllers.dodge.Status="DODGE! cooldown";return end
+        -- Consume the swing before scheduling input: failures never retry this attack.
+        threat.Attempted=true
         M.LastDodge=os.clock()
         M.Controllers.dodge.Status="Attempting DODGE! hotbar input"
         local generation=M.Generation
         task.delay(.04,function()
             if generation~=M.Generation or not enabled("dodge") or not active()then return end
-            if not aimedKnifeThreat(attacker)then
+            if M.Threats[attacker]~=threat or not aimedKnifeThreat(attacker)then
                 M.EvadeUntil=nil;restoreEquipment();M.Controllers.dodge.Status="Knife threat no longer aimed at you";return
             end
             if c~=LP.Character then return end
