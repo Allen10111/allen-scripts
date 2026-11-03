@@ -2696,10 +2696,34 @@ local function scan()
     end
     for p,w in pairs(watches)do if present[p]~=w.Animator then w.Connection:Disconnect();watches[p]=nil;threats[p]=nil end end
 end
-local function overlaps(root,target,range)
-    -- OBB estimate; no exact server HitboxSize is available. Body radius is included.
+local DashPolicy=(function()
+local P={}
+local function finite(v)return v==v and math.abs(v)<math.huge end
+function P.Entry(x,y,z,vx,vy,vz,range)
+    if not(finite(x)and finite(y)and finite(z)and finite(vx)and finite(vy)and finite(vz))then return end
+    local near,far=0,.14
+    local speed=math.sqrt(vx*vx+vz*vz)
+    local inside=math.abs(x)<=4.25 and math.abs(y)<=5.75 and z>=-range-.75 and z<=.75
+    if inside then return 0 end
+    -- Only predict a fast approach, not ordinary distant swings or movement away.
+    if speed<15 or speed>250 or x*vx+z*vz>=0 then return end
+    far=math.min(far,10/speed)
+    local function slab(position,velocity,low,high)
+        if math.abs(velocity)<.001 then return position>=low and position<=high end
+        local a,b=(low-position)/velocity,(high-position)/velocity
+        if a>b then a,b=b,a end
+        near=math.max(near,a);far=math.min(far,b)
+        return near<=far
+    end
+    if slab(x,vx,-4.25,4.25)and slab(y,vy,-5.75,5.75)and slab(z,vz,-range-.75,.75)then return near end
+end
+return P
+
+end)()
+local function hitboxEntry(root,target,range)
     local point=root.CFrame:PointToObjectSpace(target.Position)
-    return -point.Z>=-.75 and -point.Z<=range+.75 and math.abs(point.X)<=4.25 and math.abs(point.Y)<=5.75
+    local relative=root.CFrame:VectorToObjectSpace(target.AssemblyLinearVelocity-root.AssemblyLinearVelocity)
+    return DashPolicy.Entry(point.X,point.Y,point.Z,relative.X,relative.Y,relative.Z,range)
 end
 local function step()
     local now=os.clock()
@@ -2709,12 +2733,13 @@ local function step()
     if not(c:FindFirstChild("DODGE!")or bag and bag:FindFirstChild("DODGE!"))then S.Status="DODGE! item required";return end
     if cooldown(c)then if S.PendingInput then S.PendingInput.Observed=true end;S.Status="Native DODGE! cooldown · waiting";return end
     if c:FindFirstChild("Ragdoll")or c:FindFirstChild("Stun")or c:FindFirstChild("DisableTools")then S.Status="Waiting for recovery";return end
-    if now>statusUntil then S.Status="Watching estimated knife box · one native activation per swing"end
+    if now>statusUntil then S.Status="Watching knife box + dash approach · one activation per swing"end
     for p,t in pairs(threats)do
         if now>t.Expires or not t.Track.IsPlaying or p.Character~=t.Character then threats[p]=nil
         elseif not t.Attempted and now-lastAttempt>=.55 then
             local attacker,_,root=live(p)
-            if attacker and attacker:FindFirstChild("Knife")and overlaps(root,r,t.Range)then
+            local entry=attacker and attacker:FindFirstChild("Knife")and hitboxEntry(root,r,t.Range)
+            if type(entry)=="number"then
                 if UIS:GetFocusedTextBox()then S.Status="Close text input to dodge";return end
                 local handler,reason=slotHandler()
                 if not handler then S.Status=reason or "Native hotbar handler unavailable";return end
@@ -2722,7 +2747,7 @@ local function step()
                 t.Attempted=true;lastAttempt=now;S.Attempts+=1;statusUntil=now+2
                 local generation=S.Generation
                 local attempt={Observed=false};S.PendingInput=attempt
-                log("box overlap; native button attempt",S.Attempts)
+                log(entry>0 and "dash attack predicted; native button attempt"or"box overlap; native button attempt",S.Attempts,"ETA",entry)
                 task.spawn(function()
                     if not S.Enabled or generation~=S.Generation or LP.Character~=c then return end
                     local ok,err=pcall(handler)
@@ -5213,10 +5238,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-02-r4",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-02-r5",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or "Other experience"
-local note="Build r4 · native hotbar callback · all features OFF."
+local note="Build r5 · dash-attack prediction · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -5294,7 +5319,7 @@ local hnsFeatures={
     {"disablespikes","Disable Spikes","Local spike changes and covers · server hazards may apply"},
 }
 for _,item in ipairs(hnsFeatures)do
-    features[#features+1]={Id="hns_"..item[1],Section="Ink Game",Category="Minigames",Name=item[2],Subtitle=item[1]=="dodge" and "Native hotbar callback · no simulated keys" or item[3],Badge="Hide & Seek",Game=INK,Key="__ALLEN_HNS_"..item[1],Source=item[1]=="dodge" and "IsolatedDodge" or "HNS",Mode=item[1]~="dodge" and item[1] or nil}
+    features[#features+1]={Id="hns_"..item[1],Section="Ink Game",Category="Minigames",Name=item[2],Subtitle=item[1]=="dodge" and "Knife box + dash approach · one activation per swing" or item[3],Badge="Hide & Seek",Game=INK,Key="__ALLEN_HNS_"..item[1],Source=item[1]=="dodge" and "IsolatedDodge" or "HNS",Mode=item[1]~="dodge" and item[1] or nil}
 end
 local gameCategories={"All"}
 local knownCategories={}
@@ -5387,7 +5412,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R4",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R5",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
