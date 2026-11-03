@@ -936,17 +936,16 @@ assert(type(p[3])=="function" and type(p[5])=="table" and typeof(n[3])=="Instanc
 local state={HubOnly=true,Enabled=false,Destroyed=false,Held={},Seen=setmetatable({},{__mode="k"}),Hits=0,Holds=0,Errors=0,Status="Off"}
 local activity,lastActivity
 local function findActivity()
-    assert(type(getconnections)=="function","Anti AFK needs getconnections support")
+    assert(type(getgc)=="function","Anti AFK needs getgc support")
     local afk=LP.PlayerScripts:FindFirstChild("AfkSys")
     local remote=game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
     remote=remote and remote:FindFirstChild("AFKEvent")
     assert(afk and remote,"Native AFK interface unavailable")
     local found
-    for _,connection in ipairs(getconnections(game:GetService("UserInputService").InputBegan))do
-        local fn=connection.Function
+    for _,fn in ipairs(getgc())do
         if type(fn)=="function"then
             local ok,e=pcall(getfenv,fn)
-            if ok and e.script==afk then
+            if ok and e.script==afk and debug.info(fn,"n")=="updateActivity"then
                 local values=up(fn);local hasRemote,hasClock,hasFlag=false,false,false
                 for _,v in pairs(values)do
                     if v==remote then hasRemote=true elseif type(v)=="number"then hasClock=true elseif type(v)=="boolean"then hasFlag=true end
