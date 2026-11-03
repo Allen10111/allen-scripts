@@ -52,3 +52,5 @@ Jump Rope utilities: Auto Balance sends normal A/D virtual input based on the na
 
 DODGE! lobby fix: Auto Dodge can monitor knife attackers outside Hide & Seek when the local character owns DODGE!. In Hide & Seek it retains hunter-role filtering. All other HNS controls remain round-gated. This fixes the recorded Waiting for Hide & Seek block; successful hotbar activation still needs verification.
 
+Incident 2026-11-02: both Ink Auto Dodge switches are disabled pending diagnosis. Roblox logs from the earlier session show OS memory allocation failures; the latest session shows a 15-second script execution warning, exhausted execution time and a nil-function error. The exact function responsible is not established. The old general Dodge payload is excluded from the bundle during investigation. No failing feature was rerun.
+
