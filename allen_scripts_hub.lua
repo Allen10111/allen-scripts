@@ -934,6 +934,30 @@ local function up(fn) return debug.getupvalues(fn) end
 local p,n=up(native.KeyPress),up(native.NoteInput)
 assert(type(p[3])=="function" and type(p[5])=="table" and typeof(n[3])=="Instance" and type(n[5])=="table" and type(n[6])=="table","Unsupported note engine layout")
 local state={HubOnly=true,Enabled=false,Destroyed=false,Held={},Seen=setmetatable({},{__mode="k"}),Hits=0,Holds=0,Errors=0,Status="Off"}
+local activity,lastActivity
+local function findActivity()
+    assert(type(getconnections)=="function","Anti AFK needs getconnections support")
+    local afk=LP.PlayerScripts:FindFirstChild("AfkSys")
+    local remote=game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+    remote=remote and remote:FindFirstChild("AFKEvent")
+    assert(afk and remote,"Native AFK interface unavailable")
+    local found
+    for _,connection in ipairs(getconnections(game:GetService("UserInputService").InputBegan))do
+        local fn=connection.Function
+        if type(fn)=="function"then
+            local ok,e=pcall(getfenv,fn)
+            if ok and e.script==afk then
+                local values=up(fn);local hasRemote,hasClock,hasFlag=false,false,false
+                for _,v in pairs(values)do
+                    if v==remote then hasRemote=true elseif type(v)=="number"then hasClock=true elseif type(v)=="boolean"then hasFlag=true end
+                end
+                if hasRemote and hasClock and hasFlag then assert(not found or found==fn,"Ambiguous AFK handler");found=fn end
+            end
+        end
+    end
+    assert(found,"Native AFK activity handler unavailable")
+    return found
+end
 local function call(fn,...)
     local getid=getthreadidentity or getidentity
     local setid=setthreadidentity or setidentity
@@ -963,6 +987,7 @@ function state:Release()
     for lane=1,4 do local ok,err=pcall(self.ReleaseLane,self,lane);if not ok then self.LastError=tostring(err) end end
 end
 function state:SetEnabled(value)
+    if value==true and not self.Destroyed then activity=findActivity();activity();lastActivity=os.clock()end
     self:Release();self.Enabled=value==true and not self.Destroyed
     self.Status=self.Enabled and "Waiting for song" or "Off"
 end
@@ -976,6 +1001,7 @@ function state:Destroy()
     if env.__BFNF_AUTOPLAY==self then env.__BFNF_AUTOPLAY=nil end
 end
 function state:Step(dt)
+    if activity and os.clock()-(lastActivity or 0)>=20 then activity();lastActivity=os.clock()end
     local press=up(native.KeyPress)
     local noteUp=up(native.NoteInput)
     local active,side=press[1],press[8]
