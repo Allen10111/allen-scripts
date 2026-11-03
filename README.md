@@ -14,7 +14,7 @@ Black tabbed interface inspired by Ringta's visible GUI layout, with Allen Scrip
 
 ## Included
 
-- Remote Spy (Cobalt), Build R9: restored at user request. The Universal hub switch downloads and opens official Cobalt on ON, and calls its unload lifecycle on OFF. Cobalt retains its own inspector GUI. No custom inspector code is bundled. Starts OFF. The adapter lifecycle passed mock tests; actual interception, mobile compatibility, and resolution of the earlier detection issue remain unverified.
+- Remote Spy (Cobalt), Build R10: official GUI with an Allen reduced-interception load profile. Keeps main-context outgoing capture and passive incoming-event observation; disables incoming callback replacement, existing incoming-connection hooks and separate actor setup. Session settings disable file logging, relaunch after teleport, experimental RakNet hooks, internal-event/blocked-call logs and actor logs; preserve executor compatibility checks; enable high-frequency auto-ignore and ignore PlayerModule logs. Changes are applied in memory before initialization through exact reviewed source anchors, and upstream source drift aborts the load. Reduced capture omits some traffic and does not establish anti-cheat invisibility. Hub ON loads; OFF calls Cobalt unload. Starts OFF. Profile and lifecycle mock tests passed; no live interception or detection testing was performed.
 - Blade Ball Auto Parry: disabled after a BAC anti-cheat kick during testing (Error Code 267). Not verified for use. The hub switch is unavailable; the standalone file stops before running.
 - Blade Ball: Red Ball Beep sound notice. A short local beep plays once when the visible ball enters the native red/highlighted state, rearming after it stops being red. No automatic parry, keypress, movement, or remote requests. Includes main and training ball folders. Controlled by the hub under Alerts.
 - Friday Night Partying: native note-hit scheduler for local taps, chords, and sustain segments. Skips notes marked shouldPress=false or with positive HealthLoss. Uses the native song clock; starts OFF and is controlled by the hub. Requires module access, getfenv, getconnections, debug.info, and debug.getupvalues. Mobile executor testing is pending.
@@ -71,4 +71,6 @@ Build R7 remote-spy references: Infinite Yield source https://raw.githubusercont
 R8 supersedes the R7 Cobalt integration described earlier in this version history. The runtime contains no Cobalt code or Cobalt loader. Tests used mocked hooks and synthetic local records, with no remote requests or live interception.
 
 R9 supersedes the original R8 inspector: the current hub uses the official Cobalt loader again. Earlier R8 notes are historical.
+
+R10 profile changes do not hide the executor or eliminate outgoing interception. Existing saved Cobalt settings are not edited directly by the adapter, though upstream Cobalt may persist its own settings normally. Native anti-cheat-bypass settings were not changed.
 
