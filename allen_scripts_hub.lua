@@ -2619,6 +2619,7 @@ local LP=Players.LocalPlayer
 local Run=game:GetService("RunService")
 local RS=game:GetService("ReplicatedStorage")
 local UIS=game:GetService("UserInputService")
+assert(UIS.KeyboardEnabled and not UIS.TouchEnabled,"DODGE! is PC-only; disabled on mobile after Roblox closure reports")
 local env=getgenv()
 if env.__ALLEN_HNS_dodge then env.__ALLEN_HNS_dodge:Destroy()end
 local S={HubOnly=true,Enabled=false,Destroyed=false,Actions=0,Attempts=0,Status="Off",MaxStepMs=0,Generation=0}
@@ -5284,7 +5285,7 @@ local hnsFeatures={
     {"disablespikes","Disable Spikes","Local spike changes and covers · server hazards may apply"},
 }
 for _,item in ipairs(hnsFeatures)do
-    features[#features+1]={Id="hns_"..item[1],Section="Ink Game",Category="Minigames",Name=item[2],Subtitle=item[1]=="dodge" and "Isolated keypress · estimated box · one press per swing" or item[3],Badge="Hide & Seek",Game=INK,Key="__ALLEN_HNS_"..item[1],Source=item[1]=="dodge" and "IsolatedDodge" or "HNS",Mode=item[1]~="dodge" and item[1] or nil}
+    features[#features+1]={Id="hns_"..item[1],Section="Ink Game",Category="Minigames",Name=item[2],Subtitle=item[1]=="dodge" and "Isolated keypress · estimated box · one press per swing" or item[3],Badge="Hide & Seek",Game=INK,Key="__ALLEN_HNS_"..item[1],PCOnly=item[1]=="dodge",MobileUnsupported=item[1]=="dodge",Source=item[1]=="dodge" and "IsolatedDodge" or "HNS",Mode=item[1]~="dodge" and item[1] or nil}
 end
 local gameCategories={"All"}
 local knownCategories={}
@@ -5294,6 +5295,7 @@ for _,feature in ipairs(features)do
     end
 end
 local function snapshot(feature)
+    if feature.MobileUnsupported and UIS.TouchEnabled then return {Enabled=false,Status="Disabled on mobile after crash report"}end
     if feature.PCOnly and not UIS.KeyboardEnabled then return {Enabled=false,Status="PC only"} end
     if feature.Unavailable then return {Enabled=false,Status="Unavailable"} end
     if feature.Game and feature.Game~=game.GameId then return {Enabled=false,Status="Open "..feature.Section} end
@@ -5313,6 +5315,7 @@ end
 local function change(feature)
     if hub.Destroyed or hub.Busy[feature.Id] then return end
     if feature.PCOnly and not UIS.KeyboardEnabled then note="This aimlock is PC only.";return end
+    if feature.MobileUnsupported and UIS.TouchEnabled then note="This feature is disabled on mobile after crash reports.";return end
     if feature.Unavailable then note="This script has not been completed.";return end
     if feature.Game and feature.Game~=game.GameId then note="Open "..feature.Section.." to use this feature.";return end
     hub.Busy[feature.Id]=true
@@ -5500,7 +5503,7 @@ render=function()
         row.Card.Visible=matches(f,query,false,game.GameId) and (query~="" or ((selectedGame=="All" or f.Section==selectedGame) and inTab(f)))
         if row.Card.Visible then n+=1 end
         local q=snapshot(f);local busy=hub.Busy[f.Id]
-        local unavailable=f.Unavailable or f.PCOnly and not UIS.KeyboardEnabled or f.Game and f.Game~=game.GameId
+        local unavailable=f.Unavailable or f.MobileUnsupported and UIS.TouchEnabled or f.PCOnly and not UIS.KeyboardEnabled or f.Game and f.Game~=game.GameId
         row.Toggle.BackgroundColor3=q.Enabled and C.Accent or C.Line
         row.Knob.BackgroundColor3=q.Enabled and C.BG or unavailable and C.Muted or C.Text
         row.Knob.Position=UDim2.fromOffset(q.Enabled and row.OnX or 4,4)
