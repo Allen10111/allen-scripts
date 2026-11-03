@@ -12,14 +12,29 @@ local env=getgenv()
 if env.__ALLEN_HNS_dodge then env.__ALLEN_HNS_dodge:Destroy()end
 local S={HubOnly=true,Enabled=false,Destroyed=false,Actions=0,Attempts=0,Status="Off",MaxStepMs=0,Generation=0}
 local animationIds={}
-local animations=RS:FindFirstChild("Animations");animations=animations and animations:FindFirstChild("Abilities")
-animations=animations and animations:FindFirstChild("Knife")
-if animations then for _,v in ipairs(animations:GetChildren())do
+local abilities=RS:FindFirstChild("Animations");abilities=abilities and abilities:FindFirstChild("Abilities")
+local knife=abilities and abilities:FindFirstChild("Knife")
+if knife then for _,v in ipairs(knife:GetChildren())do
     local name=v.Name:lower()
-    if v:IsA("Animation") and name:find("swing",1,true) and not name:find("victim",1,true)then
-        local id=v.AnimationId:match("%d+");if id then animationIds[id]=name:find("lunge",1,true)and 14 or 8 end
+    if v:IsA("Animation")and name:find("swing",1,true)and not name:find("victim",1,true)then
+        local id=v.AnimationId:match("%d+")
+        if id then animationIds[id]={Kind="Knife",Range=name:find("lunge",1,true)and 14 or 8}end
     end
 end end
+-- SharedFunctions maps Weak Fists to FightBack, which also contains non-punch assets.
+-- Explicit whitelist avoids victim, clash, QTE and pole animations in the same folder.
+local weakNames={Punch1=true,Punch2=true,Punch3=true,AttemptToPunchBack=true}
+local fightBack=abilities and abilities:FindFirstChild("FightBack")
+if fightBack then for _,v in ipairs(fightBack:GetChildren())do
+    if v:IsA("Animation")and weakNames[v.Name]then
+        local id=v.AnimationId:match("%d+")
+        if id then animationIds[id]={Kind="Weak Fists",Range=6}end
+    end
+end end
+local function weaponMatches(c,kind)
+    -- The exact FightBack punch IDs identify Weak Fists even when it auto-uses from inventory.
+    return kind=="Weak Fists" or c:FindFirstChild("Knife")~=nil
+end
 local watches,threats={},{}
 local heartbeat,lastScan,lastAttempt,statusUntil,elapsed=nil,0,-math.huge,0,0
 local function log(...)print("[DODGE ISOLATED]",...)end
@@ -68,12 +83,12 @@ local function scan()
                 if not watches[p]or watches[p].Animator~=a then
                     if watches[p]then watches[p].Connection:Disconnect()end
                     watches[p]={Animator=a,Connection=a.AnimationPlayed:Connect(function(track)
-                        if not S.Enabled or not c:FindFirstChild("Knife")then return end
+                        if not S.Enabled then return end
                         local id=track.Animation and track.Animation.AnimationId:match("%d+")
-                        local range=id and animationIds[id]
-                        if range then
-                            threats[p]={Character=c,Track=track,Range=range,Expires=os.clock()+1.2,Attempted=false}
-                            log("swing",p.Name,id)
+                        local profile=id and animationIds[id]
+                        if profile and weaponMatches(c,profile.Kind)then
+                            threats[p]={Character=c,Track=track,Range=profile.Range,Kind=profile.Kind,Expires=os.clock()+1.2,Attempted=false}
+                            log("swing",p.Name,profile.Kind,id)
                         end
                     end)}
                 end
@@ -119,12 +134,12 @@ local function step()
     if not(c:FindFirstChild("DODGE!")or bag and bag:FindFirstChild("DODGE!"))then S.Status="DODGE! item required";return end
     if cooldown(c)then if S.PendingInput then S.PendingInput.Observed=true end;S.Status="Native DODGE! cooldown · waiting";return end
     if c:FindFirstChild("Ragdoll")or c:FindFirstChild("Stun")or c:FindFirstChild("DisableTools")then S.Status="Waiting for recovery";return end
-    if now>statusUntil then S.Status="Watching knife box + dash approach · one activation per swing"end
+    if now>statusUntil then S.Status="Watching knife / weak fists + dash approach · one activation per swing"end
     for p,t in pairs(threats)do
         if now>t.Expires or not t.Track.IsPlaying or p.Character~=t.Character then threats[p]=nil
         elseif not t.Attempted and now-lastAttempt>=.55 then
             local attacker,_,root=live(p)
-            local entry=attacker and attacker:FindFirstChild("Knife")and hitboxEntry(root,r,t.Range)
+            local entry=attacker and weaponMatches(attacker,t.Kind)and hitboxEntry(root,r,t.Range)
             if type(entry)=="number"then
                 if UIS:GetFocusedTextBox()then S.Status="Close text input to dodge";return end
                 local handler,reason=slotHandler()
@@ -164,7 +179,7 @@ function S:SetEnabled(value)
         local duration=(os.clock()-started)*1000;self.MaxStepMs=math.max(self.MaxStepMs,duration)
         if not ok or duration>50 then self:SetEnabled(false);self.Status="Stopped by error / timing guard";log("GUARD STOP",tostring(err),duration)end
     end)
-    self.Status="Watching knife threats";log("ON")
+    self.Status="Watching knife / weak-fist threats";log("ON")
 end
 function S:GetSnapshot()return {Enabled=self.Enabled,Status=self.Status,Actions=self.Actions,Attempts=self.Attempts,MaxStepMs=self.MaxStepMs}end
 function S:Destroy()if self.Destroyed then return end;self:SetEnabled(false);self.Destroyed=true;if env.__ALLEN_HNS_dodge==self then env.__ALLEN_HNS_dodge=nil end end
