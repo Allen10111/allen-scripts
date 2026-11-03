@@ -543,6 +543,46 @@ RemoteSpy=[====[
 -- Upstream Cobalt: https://gitlab.com/upio/cobalt/ (deivid / upio).
 -- No interception hooks are installed by this adapter itself. Starts OFF.
 local URL="https://gitlab.com/upio/cobalt/-/releases/permalink/latest/downloads/Cobalt.luau"
+local applyProfile=(function()
+-- Reduce optional interception; this does not establish anti-cheat invisibility.
+local function replaceOnce(source,needle,replacement)
+    local first,last=source:find(needle,1,true)
+    assert(first,"Cobalt source changed; reduced-interception profile needs review")
+    assert(not source:find(needle,last+1,true),"Ambiguous Cobalt profile anchor; load aborted")
+    return source:sub(1,first-1)..replacement..source:sub(last+1)
+end
+return function(source)
+    source=source:gsub("\r\n","\n")
+    local needle=[[local OptionsTemplate: Options = {
+	IncomingConnections = true,
+	IncomingCallbacks = true,
+	HookIncomingConnections = true,
+	Outgoing = true,
+	Actors = true,
+}]]
+    local replacement=[[local OptionsTemplate: Options = {
+	IncomingConnections = true,
+	IncomingCallbacks = false,
+	HookIncomingConnections = false,
+	Outgoing = true,
+	Actors = false,
+}]]
+    source=replaceOnce(source,needle,replacement)
+    source=replaceOnce(source,"SaveManager.State = State",[[SaveManager.State = State
+    -- Allen hub session profile, applied before interception initializes.
+    State.EnableLogging = false
+    State.ExecuteOnTeleport = false
+    State.LogActors = false
+    State.LogRobloxInternalEvents = false
+    State.LogBlockedRemotes = false
+    State.IgnorePlayerModule = true
+    State.AutoIgnoreSpammyEvents = true
+    State.DisableNonEssentialChecks = false
+    State.RakNetHooks = false]])
+    return source
+end
+
+end)()
 local env=getgenv()
 if env.__ALLEN_REMOTE_SPY then env.__ALLEN_REMOTE_SPY:Destroy()end
 local S={HubOnly=true,Enabled=false,Destroyed=false,Loading=false,Status="Off",Generation=0}
@@ -570,7 +610,7 @@ function S:SetEnabled(value)
     assert(not self.Loading,"Wait for the previous Cobalt load to finish")
     assert(not env.Cobalt and not env.CobaltInitialized,"Cobalt is already running or initializing; unload it first")
     self.Generation+=1;local generation=self.Generation
-    self.Enabled=true;self.Loading=true;self.Status="Loading Cobalt · same loader as Infinite Yield"
+    self.Enabled=true;self.Loading=true;self.Status="Loading Cobalt · reduced interception profile"
     task.spawn(function()
         local startedHere=false
         local ok,err=pcall(function()
@@ -578,6 +618,7 @@ function S:SetEnabled(value)
             assert(type(source)=="string"and #source>0,"Cobalt download was empty")
             if generation~=self.Generation or self.Destroyed then return end
             assert(not env.Cobalt and not env.CobaltInitialized,"Another Cobalt instance started during download")
+            source=applyProfile(source)
             local fn,compileError=loadstring(source,"AllenCobaltUpstream")
             assert(fn,compileError)
             startedHere=true;fn()
@@ -588,7 +629,7 @@ function S:SetEnabled(value)
             assert(shared and type(shared.Unload)=="function","Cobalt did not expose its unload API; restart before retrying")
             owned=current
             if generation~=self.Generation or self.Destroyed or not self.Enabled then unload();return end
-            self.Status="Cobalt open · incoming / outgoing inspector"
+            self.Status="Cobalt open · reduced interception"
         end)
         self.Loading=false
         if not ok then
@@ -5218,10 +5259,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-03-r9",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-03-r10",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or "Other experience"
-local note="Build r9 · Cobalt inspector · all features OFF."
+local note="Build r10 · reduced Cobalt capture · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -5250,7 +5291,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="remotespy",Section="Universal",Category="Alerts",Name="Remote Spy (Cobalt)",Subtitle="Cobalt inspector GUI · ON loads / OFF unloads",Badge="Developer",Key="__ALLEN_REMOTE_SPY",Source="RemoteSpy"},
+    {Id="remotespy",Section="Universal",Category="Alerts",Name="Remote Spy (Cobalt)",Subtitle="Reduced capture · ON loads / OFF unloads",Badge="Developer",Key="__ALLEN_REMOTE_SPY",Source="RemoteSpy"},
     {Id="bladeparry",Section="Blade Ball",Category="Combat",Name="Auto Parry",Subtitle="Disabled after BAC anti-cheat kick",Badge="Testing",Unavailable=true,Game=BLADE,Key="__BLADE_AUTO_PARRY",Source="BladeParry"},
     {Id="bladebeep",Section="Blade Ball",Category="Alerts",Name="Red Ball Beep",Subtitle="Short sound when the ball turns red · manual parry",Badge="Blade Ball",Game=BLADE,Key="__BLADE_BALL_BEEP",Source="BladeBeep"},
     {Id="fnp",Section="Friday Night Partying",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, sustains and chords · skips harmful notes",Badge="Friday Night Partying",Game=FNP,Key="__FNP_AUTOPLAY",Source="FNP"},
@@ -5392,7 +5433,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R9",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R10",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
