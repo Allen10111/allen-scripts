@@ -17825,6 +17825,8 @@ if not M or M.Destroyed then
         end
     end
     function M:Reset()
+        if self.FinishCollection then self.FinishCollection()end
+        self.KeyVisited=nil;self.NextKeyAt=nil
         self.Generation+=1
         restoreEquipment()
         if self.Moving then local _,h=live(LP);if h then h:Move(Vector3.zero,false)end end
@@ -18108,31 +18110,64 @@ if not M or M.Destroyed then
         end end end
         M.Controllers.hitboxes.Status=n.." local hitboxes · server range applies"
     end
+    local function finishCollection()
+        local trip=M.KeyTrip;M.KeyTrip=nil
+        if not trip then return end
+        if trip.Prompt then pcall(function()trip.Prompt:InputHoldEnd()end)end
+        local c,_,r=live(LP)
+        if c==trip.Character and r then
+            c:PivotTo(trip.Origin)
+            r.AssemblyLinearVelocity=Vector3.zero;r.AssemblyAngularVelocity=Vector3.zero
+        end
+        M.NextKeyAt=os.clock()+.4
+    end
+    M.FinishCollection=finishCollection
     local function collect()
-        if not enabled("collect")then return false end
-        local c,h,r=live(LP);if not r then return false end
-        local best,part,distance=nil,nil,70
+        if not enabled("collect")then finishCollection();return false end
+        local c,h,r=live(LP);if not r then finishCollection();return false end
+        local s=M.Controllers.collect
+        local trip=M.KeyTrip
+        if trip then
+            M.Motion=nil
+            if c~=trip.Character or not active() or not trip.Key.Parent or os.clock()>=trip.ReturnAt then
+                finishCollection();s.Status="Returned from key pickup";return true
+            end
+            if not trip.Attempted and os.clock()>=trip.PickupAt then
+                trip.Attempted=true
+                local prompt=trip.Key:FindFirstChildWhichIsA("ProximityPrompt",true)
+                local distance=(trip.Part.Position-r.Position).Magnitude
+                if prompt and prompt.Enabled and distance<=prompt.MaxActivationDistance then
+                    -- Hold through the native prompt interface without replaying its remote.
+                    trip.Prompt=prompt;prompt:InputHoldBegin()
+                    trip.ReturnAt=os.clock()+math.clamp(prompt.HoldDuration,0,5)+.25
+                    s.Actions+=1;s.Status="Attempting dropped-key pickup"
+                elseif distance<=5 and type(firetouchinterest)=="function" and trip.Part:FindFirstChildOfClass("TouchTransmitter")then
+                    firetouchinterest(r,trip.Part,0);firetouchinterest(r,trip.Part,1)
+                    trip.ReturnAt=os.clock()+.3;s.Actions+=1;s.Status="Attempting key touch pickup"
+                else trip.ReturnAt=os.clock()+.3;s.Status="Waiting for native key pickup" end
+            end
+            return true
+        end
+        if os.clock()<(M.NextKeyAt or 0)then return true end
+        if c:FindFirstChild("Ragdoll") or c:FindFirstChild("DisableMovement")then
+            s.Status="Waiting for movement recovery";return true
+        end
+        M.KeyVisited=M.KeyVisited or setmetatable({},{__mode="k"})
+        local best,part,distance=nil,nil,math.huge
         for object in pairs(M.Keys)do
             local p=object.Parent and objectPart(object)
-            if p and object:IsDescendantOf(workspace)then
-                local d=(p.Position-r.Position).Magnitude;if d<distance then best=object;part=p;distance=d end
+            if p and not M.KeyVisited[object] and object:IsDescendantOf(workspace)then
+                local d=(p.Position-r.Position).Magnitude
+                if d<distance then best=object;part=p;distance=d end
             end
         end
-        local s=M.Controllers.collect
-        if not best then s.Status="Waiting for nearby dropped key";return false end
-        if distance>4 then route("collect",best,part.Position);s.Status="Walking to dropped key";return true end
-        M.Motion=nil
-        if os.clock()-(M.LastPickup or 0)>=1 then
-            M.LastPickup=os.clock()
-            local prompt=best:FindFirstChildWhichIsA("ProximityPrompt",true)
-            if prompt and prompt.Enabled and distance<=prompt.MaxActivationDistance then
-                if type(fireproximityprompt)=="function" then fireproximityprompt(prompt)
-                else prompt:InputHoldBegin();local generation=M.Generation;task.delay(prompt.HoldDuration+.05,function()if generation==M.Generation and prompt.Parent then prompt:InputHoldEnd()end end)end
-                s.Actions+=1;s.Status="Native key pickup attempted"
-            elseif type(firetouchinterest)=="function" and part:FindFirstChildOfClass("TouchTransmitter")then
-                firetouchinterest(r,part,0);firetouchinterest(r,part,1);s.Actions+=1;s.Status="Nearby key touch attempted"
-            else s.Status="At dropped key · waiting for native pickup" end
-        end
+        if not best then s.Status="Waiting for new dropped keys";return false end
+        M.Motion=nil;M.KeyVisited[best]=true
+        local now=os.clock()
+        M.KeyTrip={Character=c,Origin=c:GetPivot(),Key=best,Part=part,PickupAt=now+.2,ReturnAt=now+1}
+        c:PivotTo(CFrame.new(part.Position+Vector3.new(0,2.5,0))*r.CFrame.Rotation)
+        r.AssemblyLinearVelocity=Vector3.zero;r.AssemblyAngularVelocity=Vector3.zero
+        s.Status="Teleported to dropped key · will return"
         return true
     end
     function M:Step()
@@ -18170,7 +18205,7 @@ if not M or M.Destroyed then
             if target then local _,_,other=live(target);route("follow",target,other.Position);self.Controllers.follow.Status="Following "..target.DisplayName
             else self.Controllers.follow.Status="Waiting for nearby blue-team hider"end
         end
-        if enabled("teleport")then
+        if not collecting and enabled("teleport")then
             local s=self.Controllers.teleport
             if self.Teleported==c then s.Status="Teleported to hider"
             else
@@ -18229,6 +18264,9 @@ if not M or M.Destroyed then
         function s:SetEnabled(value)
             if self.Destroyed then return end
             self.Enabled=value==true
+            if mode=="collect"then
+                if not self.Enabled then finishCollection()else M.KeyVisited=nil end
+            end
             if mode=="teleport"then M.Teleported=nil end
             if not self.Enabled then
                 clearMarks(self);restore(mode)
@@ -18327,7 +18365,7 @@ local hnsFeatures={
     {"keys","Dropped Key ESP","Highlights recognized dropped keys"},
     {"stairs","Stair ESP","Highlights named staircase objects"},
     {"spikes","Spike ESP","Highlights named spike hazards"},
-    {"collect","Collect Dropped Keys","Walks to nearby keys · native pickup"},
+    {"collect","Collect Dropped Keys","Teleports to each key · returns after pickup"},
     {"dodge","Auto Dodge (DODGE!)","DODGE! only for knife animations aimed at you"},
     {"stamina","Infinite Stamina","Keeps the native client stamina value full"},
     {"follow","Follow Blue Team","Finds walkable routes to nearby hiders"},
