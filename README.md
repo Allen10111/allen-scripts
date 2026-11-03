@@ -54,3 +54,7 @@ DODGE! lobby fix: Auto Dodge can monitor knife attackers outside Hide & Seek whe
 
 Incident 2026-11-02: both Ink Auto Dodge switches are disabled pending diagnosis. Roblox logs from the earlier session show OS memory allocation failures; the latest session shows a 15-second script execution warning, exhausted execution time and a nil-function error. The exact function responsible is not established. The old general Dodge payload is excluded from the bundle during investigation. No failing feature was rerun.
 
+Isolated DODGE! replacement: the Hide & Seek Dodge row now uses a separate small controller, without the HNS map scanner or movement/pathfinding code. It uses arithmetic estimated-box intersection and normal executor keypress/keyrelease, one pair per detected knife animation, observes native cooldowns, and has a 50 ms step guard. It supports visible numeric/E/T/Y hotbar keys on PC; physical mobile input is not supported by this replacement. Exact server hitbox dimensions remain unavailable. General legacy Auto Dodge remains disabled.
+
+Isolated live test (2026-11-02): 60-second monitored run on asdfaq443 completed with six single-key attempts, native cooldown observations, no logged health decreases and no script errors or disconnect during the window. Maximum measured controller step was 1.826 ms. This does not prove crash resolution or exact hitbox timing. A follow-up status-only change latches short-lived cooldown observations instead of checking only after 0.4 seconds. The controller was automatically turned OFF after the run.
+
