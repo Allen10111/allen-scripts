@@ -195,10 +195,15 @@ if not M or M.Destroyed then
             else M.Motion=nil;M.Controllers[owner].Status="No walkable route found" end
         end)
     end
+    local function knifeAttacker(p)
+        if not p or p==LP then return false end
+        local c=live(p)
+        return c and c:FindFirstChild("Knife") and (not active() or hunter(p))
+    end
     local function aimedKnifeThreat(attacker)
         local threat=M.Threats[attacker]
         if type(threat)~="table" or threat.Expires<=os.clock() or not threat.Track.IsPlaying
-            or threat.Character~=attacker.Character or not hunter(attacker)then return false end
+            or threat.Character~=attacker.Character or not knifeAttacker(attacker)then return false end
         local c,_,other=live(attacker);local _,_,r=live(LP)
         if not c or not r or not c:FindFirstChild("Knife")then return false end
         local offset=r.Position-other.Position
@@ -304,7 +309,7 @@ if not M or M.Destroyed then
             local c,_,r=live(p)
             if p~=LP and c then
                 objects[c]=true
-                if enabled("dodge") and hunter(p)then
+                if enabled("dodge") and knifeAttacker(p)then
                     local animator=c:FindFirstChildOfClass("Humanoid") and c:FindFirstChildOfClass("Humanoid"):FindFirstChildOfClass("Animator")
                     if animator and not M.Animators[animator]then
                         M.Animators[animator]=animator.AnimationPlayed:Connect(function(track)
@@ -323,6 +328,7 @@ if not M or M.Destroyed then
         for animator,connection in pairs(M.Animators)do
             if not animator:IsDescendantOf(workspace) or not enabled("dodge")then connection:Disconnect();M.Animators[animator]=nil end
         end
+        if not active()then return end
         mark("players",objects,function(c)
             local p=Players:GetPlayerFromCharacter(c)
             return p and hider(p) and colors.Blue or p and hunter(p) and colors.Red or colors.White
@@ -449,6 +455,23 @@ if not M or M.Destroyed then
     function M:Step()
         local any=false;for _,c in pairs(self.Controllers)do if c.Enabled then any=true;break end end
         local map=workspace:FindFirstChild("HideAndSeekMap")
+        -- DODGE! is also usable in private-server lobby tests. Other HNS modes stay gated.
+        if any and enabled("dodge") and (not active() or not map)then
+            if self.Map then self:Reset()end
+            if not self.AttackIds then loadAttacks()end
+            local c=live(LP);local bag=LP:FindFirstChildOfClass("Backpack")
+            local tool=c and (c:FindFirstChild("DODGE!") or bag and bag:FindFirstChild("DODGE!"))
+            if tool then
+                peers()
+                for attacker,threat in pairs(self.Threats)do
+                    if threat.Expires<=os.clock() or not threat.Track.IsPlaying then self.Threats[attacker]=nil
+                    elseif aimedKnifeThreat(attacker)then evade(attacker)end
+                end
+                if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife threats · outside Hide & Seek"end
+            else self.Controllers.dodge.Status="DODGE! item required"end
+            for mode,state in pairs(self.Controllers)do if mode~="dodge"and state.Enabled then state.Status="Waiting for Hide & Seek"end end
+            return
+        end
         if not any or not active() or not map then
             if self.Map then self:Reset()end
             for _,c in pairs(self.Controllers)do if c.Enabled then c.Status="Waiting for Hide & Seek"end end
@@ -508,7 +531,8 @@ if not M or M.Destroyed then
     end
     local renderName="AllenHNS_"..game:GetService("HttpService"):GenerateGUID(false)
     RunService:BindToRenderStep(renderName,Enum.RenderPriority.Input.Value+2,function()
-        if M.Destroyed or not M.Map or not active()then return end
+        if M.Destroyed then return end
+        if (not M.Map or not active()) and not enabled("dodge")then return end
         local c,h,r=live(LP);if not r then return end
         if c:FindFirstChild("Ragdoll") or c:FindFirstChild("Stun") or c:FindFirstChild("DisableMovement")then
             if M.Moving then h:Move(Vector3.zero,false);M.Moving=false end;return
