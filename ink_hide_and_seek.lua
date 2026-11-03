@@ -231,13 +231,6 @@ if not M or M.Destroyed then
         M.LastDodge=os.clock();M.EvadeDirection=direction;M.EvadeUntil=os.clock()+.18
         M.DodgeItemUntil=os.clock()+.45
         M.Controllers.dodge.Status="Evading knife threat"
-        local previous=c:FindFirstChildOfClass("Tool")
-        if tool.Parent~=c then
-            restoreEquipment()
-            local lease={Character=c,Tool=tool,Previous=previous,Backpack=bag};M.DodgeEquipment=lease
-            h:EquipTool(tool)
-            task.delay(.35,function()if M.DodgeEquipment==lease then restoreEquipment()end end)
-        end
         local generation=M.Generation
         task.delay(.04,function()
             if generation~=M.Generation or not enabled("dodge") or not active()then return end
@@ -245,17 +238,40 @@ if not M or M.Destroyed then
                 M.EvadeUntil=nil;restoreEquipment();M.Controllers.dodge.Status="Knife threat no longer aimed at you";return
             end
             if c~=LP.Character then return end
-            if tool.Parent~=c then M.Controllers.dodge.Status="Waiting for DODGE! equip";return end
             if onCooldown(c,tool)then M.Controllers.dodge.Status="DODGE! cooldown";return end
             local ok,err=pcall(function()
                 local input=game:GetService("UserInputService")
                 assert(not input:GetFocusedTextBox(),"Close the text box before dodging")
-                assert(type(mouse1press)=="function" and type(mouse1release)=="function",
-                    "Executor mouse input is unavailable; no remote fallback")
-                -- The game's equipped-tool action is MouseButton1, not the ordinary Q dash.
-                -- Release is unconditional, including when the controller is switched OFF.
-                mouse1press()
-                task.delay(.03,function()pcall(mouse1release)end)
+                local gui=LP:FindFirstChildOfClass("PlayerGui")
+                local hotbar=gui and gui:FindFirstChild("Hotbar")
+                hotbar=hotbar and hotbar:FindFirstChild("Backpack")
+                hotbar=hotbar and hotbar:FindFirstChild("Hotbar")
+                local slot
+                if hotbar then for _,button in ipairs(hotbar:GetChildren())do
+                    local label=button:FindFirstChild("ToolName")
+                    if button:IsA("GuiButton") and button.Visible and label and label.Text==tool.Name then
+                        slot=button;break
+                    end
+                end end
+                assert(slot,"DODGE! must be visible in the hotbar")
+                local vim=game:GetService("VirtualInputManager")
+                local number=slot:FindFirstChild("Number")
+                local names={['1']='One',['2']='Two',['3']='Three',['4']='Four',['5']='Five',
+                    ['6']='Six',['7']='Seven',['8']='Eight',['9']='Nine',['0']='Zero'}
+                local key=number and names[number.Text]
+                if input.KeyboardEnabled and key then
+                    local code=Enum.KeyCode[key]
+                    vim:SendKeyEvent(true,code,false,game)
+                    task.delay(.03,function()pcall(function()vim:SendKeyEvent(false,code,false,game)end)end)
+                else
+                    local center=slot.AbsolutePosition+slot.AbsoluteSize/2
+                    local top=gui:GetGuiObjectsAtPosition(center.X,center.Y)[1]
+                    assert(top and (top==slot or top:IsDescendantOf(slot)),"DODGE! hotbar button is covered")
+                    vim:SendMouseButtonEvent(center.X,center.Y,0,true,game,0)
+                    task.delay(.03,function()pcall(function()
+                        vim:SendMouseButtonEvent(center.X,center.Y,0,false,game,0)
+                    end)end)
+                end
                 M.Controllers.dodge.Actions+=1;M.Controllers.dodge.Status="DODGE! input sent"
             end)
             if not ok then M.Controllers.dodge.Status="DODGE! unavailable: "..tostring(err):sub(1,75)end
