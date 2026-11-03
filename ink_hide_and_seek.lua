@@ -186,7 +186,6 @@ if not M or M.Destroyed then
             else M.Motion=nil;M.Controllers[owner].Status="No walkable route found" end
         end)
     end
-    local ensureToolInterface
     local function aimedKnifeThreat(attacker)
         local threat=M.Threats[attacker]
         if type(threat)~="table" or threat.Expires<=os.clock() or not threat.Track.IsPlaying
@@ -249,11 +248,15 @@ if not M or M.Destroyed then
             if tool.Parent~=c then M.Controllers.dodge.Status="Waiting for DODGE! equip";return end
             if onCooldown(c,tool)then M.Controllers.dodge.Status="DODGE! cooldown";return end
             local ok,err=pcall(function()
-                ensureToolInterface()
-                if M.Shared.CheckIfStunned(c)then return end
-                local options=M.Shared.GetMoveExtraOptions(c,tool,{Clicked=true,IsRunning=false})
-                M.ToolRemote:FireServer("UsingMoveCustom",tool,nil,options)
-                M.Controllers.dodge.Actions+=1;M.Controllers.dodge.Status="DODGE! item requested"
+                local input=game:GetService("UserInputService")
+                assert(not input:GetFocusedTextBox(),"Close the text box before dodging")
+                assert(type(mouse1press)=="function" and type(mouse1release)=="function",
+                    "Executor mouse input is unavailable; no remote fallback")
+                -- The game's equipped-tool action is MouseButton1, not the ordinary Q dash.
+                -- Release is unconditional, including when the controller is switched OFF.
+                mouse1press()
+                task.delay(.03,function()pcall(mouse1release)end)
+                M.Controllers.dodge.Actions+=1;M.Controllers.dodge.Status="DODGE! input sent"
             end)
             if not ok then M.Controllers.dodge.Status="DODGE! unavailable: "..tostring(err):sub(1,75)end
         end)
@@ -298,14 +301,6 @@ if not M or M.Destroyed then
                 if id then M.AttackIds[id]={Range=v.Name:lower():find("lunge",1,true) and 14 or 8}end
             end
         end end
-    end
-    ensureToolInterface=function()
-        if M.Shared and M.ToolRemote then return end
-        local modules=RS:FindFirstChild("Modules");local remotes=RS:FindFirstChild("Remotes")
-        assert(modules and remotes,"Native tool modules are unavailable")
-        M.Shared=require(modules:FindFirstChild("SharedFunctions"))
-        M.ToolRemote=require(modules:FindFirstChild("RemoteWrapper"))(remotes:FindFirstChild("UsedTool"))
-        assert(type(M.Shared.GetMoveExtraOptions)=="function" and M.ToolRemote,"Native tool interface is unavailable")
     end
     local function spikes()
         if not enabled("disablespikes")then
