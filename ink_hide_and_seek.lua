@@ -207,23 +207,18 @@ if not M or M.Destroyed then
         local c,_,other=live(attacker);local _,_,r=live(LP)
         if not c or not r or not c:FindFirstChild("Knife")then return false end
         local offset=r.Position-other.Position
-        local flat=Vector3.new(offset.X,0,offset.Z)
-        local look=Vector3.new(other.CFrame.LookVector.X,0,other.CFrame.LookVector.Z)
-        if look.Magnitude<.1 then return false end;look=look.Unit
-        local right=look:Cross(Vector3.yAxis)
-        local function intersects(delta)
-            local relative=flat-delta
-            return KnifePolicy.InAttackBox(relative:Dot(look),relative:Dot(right),offset.Y,threat.Range)
+        -- Geometry gate: estimated oriented attack volume versus actual local body parts.
+        -- HB caller dimensions are unavailable; these are explicitly estimated, not server hitboxes.
+        local box=other.CFrame*CFrame.new(0,0,-threat.Range/2)
+        local overlap=OverlapParams.new();overlap.FilterType=Enum.RaycastFilterType.Include
+        overlap.FilterDescendantsInstances={LP.Character}
+        local intersecting=false
+        local body={HumanoidRootPart=true,Head=true,Torso=true,UpperTorso=true,LowerTorso=true,
+            ["Right Arm"]=true,["Left Arm"]=true,["Right Leg"]=true,["Left Leg"]=true}
+        for _,part in ipairs(workspace:GetPartBoundsInBox(box,Vector3.new(7,10,threat.Range),overlap))do
+            if body[part.Name]then intersecting=true;break end
         end
-        local threatening=intersects(Vector3.zero)
-        -- HB's optional velocity prediction: horizontal velocity * .1, capped at 10 studs.
-        -- We cannot observe the server caller's option, so this remains predictive geometry.
-        if not threatening and not attacker:GetAttribute("NoHitboxPredict")then
-            local velocity=other.AssemblyLinearVelocity
-            local x,z=KnifePolicy.Prediction(velocity.X,velocity.Z)
-            threatening=intersects(Vector3.new(x,0,z))
-        end
-        if not threatening then return false end
+        if not intersecting then return false end
         local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances={workspace:FindFirstChild("Live") or c,LP.Character}
         params.IgnoreWater=true;params.RespectCanCollide=true
@@ -254,8 +249,8 @@ if not M or M.Destroyed then
         M.LastDodge=os.clock()
         M.Controllers.dodge.Status="Attempting DODGE! hotbar input"
         local generation=M.Generation
-        task.delay(.04,function()
-            if generation~=M.Generation or not enabled("dodge") or not active()then return end
+        task.defer(function()
+            if generation~=M.Generation or not enabled("dodge")then return end
             if M.Threats[attacker]~=threat or not aimedKnifeThreat(attacker)then
                 M.EvadeUntil=nil;restoreEquipment();M.Controllers.dodge.Status="Knife threat no longer aimed at you";return
             end
@@ -322,7 +317,7 @@ if not M or M.Destroyed then
                             if enabled("dodge") and profile then
                                 M.Threats[p]={Track=track,Character=c,Range=profile.Range,
                                     Expires=os.clock()+math.clamp(.6/math.max(.2,track.Speed),.2,.9)}
-                                evade(p)
+                                -- Animation identifies a swing; the geometry poll decides whether to press.
                             end
                         end)
                     end
@@ -471,7 +466,7 @@ if not M or M.Destroyed then
                     if threat.Expires<=os.clock() or not threat.Track.IsPlaying then self.Threats[attacker]=nil
                     elseif aimedKnifeThreat(attacker)then evade(attacker)end
                 end
-                if os.clock()-(self.LastDodge or 0)>.6 and os.clock()>(self.DodgeStatusUntil or 0)then self.Controllers.dodge.Status="Watching knife threats · outside Hide & Seek"end
+                if os.clock()-(self.LastDodge or 0)>.6 and os.clock()>(self.DodgeStatusUntil or 0)then self.Controllers.dodge.Status="Watching attack-box overlap · outside Hide & Seek"end
             else self.Controllers.dodge.Status="DODGE! item required"end
             for mode,state in pairs(self.Controllers)do if mode~="dodge"and state.Enabled then state.Status="Waiting for Hide & Seek"end end
             return
@@ -500,7 +495,7 @@ if not M or M.Destroyed then
                 if threat.Expires<=os.clock() or not threat.Track.IsPlaying then self.Threats[attacker]=nil
                 elseif aimedKnifeThreat(attacker)then evade(attacker)end
             end
-            if os.clock()-(self.LastDodge or 0)>.6 and os.clock()>(self.DodgeStatusUntil or 0)then self.Controllers.dodge.Status="Watching knife animations + predicted attack box"end
+            if os.clock()-(self.LastDodge or 0)>.6 and os.clock()>(self.DodgeStatusUntil or 0)then self.Controllers.dodge.Status="Watching attack-box overlap · one press per swing"end
         end
         local collecting=collect()
         if not collecting and enabled("follow")then
