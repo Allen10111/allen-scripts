@@ -1,107 +1,72 @@
--- Disabled after a confirmed BAC kick during logging.
-error("Remote Spy disabled after BAC detection during testing")
--- Allen Scripts: local outbound remote logger. Starts OFF, no standalone UI.
+-- Allen Scripts adapter for the Cobalt loader used by Infinite Yield's remotespy command.
+-- Upstream Cobalt: https://gitlab.com/upio/cobalt/ (deivid / upio).
+-- No interception hooks are installed by this adapter itself. Starts OFF.
+local URL="https://gitlab.com/upio/cobalt/-/releases/permalink/latest/downloads/Cobalt.luau"
 local env=getgenv()
 if env.__ALLEN_REMOTE_SPY then env.__ALLEN_REMOTE_SPY:Destroy()end
-local S={HubOnly=true,Enabled=false,Destroyed=false,Calls=0,Dropped=0,Pending=0,Logs={},Status="Off"}
-local bridge=env.__ALLEN_REMOTE_SPY_HOOK
-if not bridge then bridge={};env.__ALLEN_REMOTE_SPY_HOOK=bridge end
-local function preview(v,depth,seen)
-    local kind=typeof(v)
-    if kind=="string"then return string.format("%q",v:sub(1,220))..(#v>220 and "…"or"")end
-    if kind=="Instance"then local ok,path=pcall(v.GetFullName,v);return ok and path or tostring(v)end
-    if kind~="table"then return tostring(v)end
-    if seen[v]then return "<cycle>"end
-    if depth>=2 then return "<table>"end
-    seen[v]=true
-    local items={};local n=0
-    for k,x in pairs(v)do
-        n+=1;if n>8 then items[#items+1]="…";break end
-        items[#items+1]="["..preview(k,depth+1,seen).."]="..preview(x,depth+1,seen)
-    end
-    seen[v]=nil
-    return "{"..table.concat(items,", ").."}"
+local S={HubOnly=true,Enabled=false,Destroyed=false,Loading=false,Status="Off",Generation=0}
+local owned
+local function sharedOf(value)
+    return type(value)=="table"and type(value.shared)=="table"and value.shared or nil
 end
-local function install()
-    if bridge.Installed then return end
-    assert(type(hookmetamethod)=="function" and type(getnamecallmethod)=="function" and type(newcclosure)=="function",
-        "Remote Spy needs hookmetamethod, getnamecallmethod and newcclosure")
-    local original
-    original=hookmetamethod(game,"__namecall",newcclosure(function(object,...)
-        local state=bridge.State
-        if state and state.Enabled and not state.Destroyed then
-            local method=getnamecallmethod()
-            local ok,isRemote=pcall(function()
-                local class=object.ClassName
-                return (method=="FireServer"and(class=="RemoteEvent"or class=="UnreliableRemoteEvent"))
-                    or(method=="InvokeServer"and class=="RemoteFunction")
-            end)
-            if ok and isRemote then
-                local now=os.clock()
-                if now>=(state.WindowEnds or 0)then state.WindowEnds=now+1;state.WindowCount=0 end
-                if (state.WindowCount or 0)>=40 or state.Pending>=80 then state.Dropped+=1
-                else
-                    state.WindowCount=(state.WindowCount or 0)+1;state.Pending+=1
-                    local args=table.pack(...)
-                    task.defer(function()
-                        state.Pending-=1
-                        if not state.Enabled or state.Destroyed then return end
-                        local rendered={}
-                        local success,message=pcall(function()
-                            for i=1,math.min(args.n,12)do rendered[i]=preview(args[i],0,{})end
-                            if args.n>12 then rendered[#rendered+1]="…"end
-                            local path=object:GetFullName()
-                            local entry={Time=now,Method=method,Path=path,Arguments=table.concat(rendered,", ")}
-                            state.Calls+=1;state.Logs[#state.Logs+1]=entry
-                            if #state.Logs>100 then table.remove(state.Logs,1)end
-                            state.Status=method.." · "..object.Name
-                            print("[Remote Spy] "..method.." "..path.."("..entry.Arguments..")")
-                        end)
-                        if not success then state.LastError=tostring(message)end
-                    end)
-                end
-            end
-        end
-        return original(object,...)
-    end))
-    bridge.Installed=true
+local function unload()
+    local current=owned;owned=nil
+    local shared=sharedOf(current)
+    if shared and not shared.Unloaded then
+        assert(type(shared.Unload)=="function","Cobalt unload API changed; use Cobalt's own unload control")
+        shared.Unload()
+    end
 end
 function S:SetEnabled(value)
     if self.Destroyed then return end
-    if value then install()end
-    self.Enabled=value==true;self.Status=self.Enabled and "Logging outbound remotes"or"Off"
-    bridge.State=self
-    if self.Enabled then self:DumpRemotes()end
-end
-function S:DumpRemotes()
-    self.DumpGeneration=(self.DumpGeneration or 0)+1
-    local generation=self.DumpGeneration
+    if value~=true then
+        self.Generation+=1;self.Enabled=false
+        local ok,err=pcall(unload)
+        self.Status=ok and (self.Loading and "Cancelling Cobalt load"or"Off")or("Unload failed: "..tostring(err):sub(1,110))
+        return
+    end
+    if self.Enabled then return end
+    assert(not self.Loading,"Wait for the previous Cobalt load to finish")
+    assert(not env.Cobalt and not env.CobaltInitialized,"Cobalt is already running or initializing; unload it first")
+    self.Generation+=1;local generation=self.Generation
+    self.Enabled=true;self.Loading=true;self.Status="Loading Cobalt · same loader as Infinite Yield"
     task.spawn(function()
-        print("[Remote Spy] Remote instances have no script source. Server handlers are not replicated.")
-        local ok,descendants=pcall(game.GetDescendants,game)
-        if not ok then warn("[Remote Spy] Remote inventory failed: "..tostring(descendants));return end
-        local count=0
-        for i,object in ipairs(descendants)do
-            if self.Destroyed or not self.Enabled or self.DumpGeneration~=generation then return end
-            local class=object.ClassName
-            if class=="RemoteEvent"or class=="RemoteFunction"or class=="UnreliableRemoteEvent"then
-                local success,path=pcall(object.GetFullName,object)
-                if success then count+=1;print("[Remote Spy / Inventory] "..class.." | "..path.." | Source: not applicable")end
-            end
-            if i%250==0 then task.wait()end
-        end
-        self.RemoteCount=count
-        print("[Remote Spy] Inventory complete: "..count.." replicated remotes")
+        local startedHere=false
+        local ok,err=pcall(function()
+            local source=game:HttpGet(URL)
+            assert(type(source)=="string"and #source>0,"Cobalt download was empty")
+            if generation~=self.Generation or self.Destroyed then return end
+            assert(not env.Cobalt and not env.CobaltInitialized,"Another Cobalt instance started during download")
+            local fn,compileError=loadstring(source,"AllenCobaltUpstream")
+            assert(fn,compileError)
+            startedHere=true;fn()
+            -- Official bundle starts its entrypoint asynchronously.
+            local deadline=os.clock()+60
+            while not env.Cobalt and os.clock()<deadline do task.wait(.1)end
+            local current=env.Cobalt;local shared=sharedOf(current)
+            assert(shared and type(shared.Unload)=="function","Cobalt did not expose its unload API; restart before retrying")
+            owned=current
+            if generation~=self.Generation or self.Destroyed or not self.Enabled then unload();return end
+            self.Status="Cobalt open · incoming / outgoing inspector"
+        end)
+        self.Loading=false
+        if not ok then
+            self.Enabled=false;self.Status="Cobalt failed: "..tostring(err):sub(1,150)
+            if startedHere then pcall(unload)end
+            warn("[Allen Remote Spy] "..tostring(err))
+        elseif not self.Enabled then self.Status="Off"end
     end)
 end
 function S:GetSnapshot()
-    return {Enabled=self.Enabled,Status=self.Status.." · "..self.Calls.." calls",Dropped=self.Dropped,LastError=self.LastError}
+    local shared=sharedOf(owned)
+    if owned and (env.Cobalt~=owned or shared and shared.Unloaded)then
+        owned=nil;self.Enabled=false;self.Status="Cobalt closed"
+    end
+    return {Enabled=self.Enabled,Status=self.Status,Loading=self.Loading}
 end
-function S:Clear()table.clear(self.Logs);self.Calls=0;self.Dropped=0 end
 function S:Destroy()
-    self.Enabled=false;self.Destroyed=true;self.Status="Off"
-    if bridge.State==self then bridge.State=nil end
-    table.clear(self.Logs)
+    if self.Destroyed then return end
+    self:SetEnabled(false);self.Destroyed=true
     if env.__ALLEN_REMOTE_SPY==self then env.__ALLEN_REMOTE_SPY=nil end
 end
 env.__ALLEN_REMOTE_SPY=S
