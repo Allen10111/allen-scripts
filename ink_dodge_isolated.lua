@@ -5,6 +5,7 @@ local LP=Players.LocalPlayer
 local Run=game:GetService("RunService")
 local RS=game:GetService("ReplicatedStorage")
 local UIS=game:GetService("UserInputService")
+assert(UIS.KeyboardEnabled and not UIS.TouchEnabled,"DODGE! is PC-only; disabled on mobile after Roblox closure reports")
 local env=getgenv()
 if env.__ALLEN_HNS_dodge then env.__ALLEN_HNS_dodge:Destroy()end
 local S={HubOnly=true,Enabled=false,Destroyed=false,Actions=0,Attempts=0,Status="Off",MaxStepMs=0,Generation=0}
