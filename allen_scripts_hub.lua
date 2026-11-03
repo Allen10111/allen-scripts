@@ -2766,6 +2766,43 @@ env.__ALLEN_HNS_dodge=S
 return S
 
 ]====],
+PA=[====[
+assert(game.GameId==4557322431,"Open Project: Afternight")
+local env=getgenv()
+if env.__ALLEN_PA_AUTOPLAY then env.__ALLEN_PA_AUTOPLAY:Destroy()end
+local S={HubOnly=true,Enabled=false,Destroyed=false,Status="Off"}
+local engine
+local function findEngine()
+ assert(type(getgc)=="function","Executor needs getgc support")
+ local found
+ for _,v in ipairs(getgc(true))do
+  if type(v)=="table"and type(rawget(v,"GetAutoplay"))=="function"and type(rawget(v,"SetAutoplay"))=="function"then
+   assert(not found,"Multiple gameplay engines found; reload the game")
+   found=v
+  end
+ end
+ assert(found,"Gameplay engine not ready")
+ return found
+end
+function S:SetEnabled(on)
+ if self.Destroyed then return end
+ if on then engine=findEngine();engine.SetAutoplay(true);self.Enabled=engine.GetAutoplay()==true;assert(self.Enabled,"Native botplay did not enable")
+ else if engine then engine.SetAutoplay(false)end;self.Enabled=false end
+ self.Status=self.Enabled and "Native botplay ON · game scoring rules apply"or"Off"
+end
+function S:GetSnapshot()
+ if engine then self.Enabled=engine.GetAutoplay()==true end
+ return {Enabled=self.Enabled,Status=self.Enabled and "Native botplay ON · game scoring rules apply"or"Off"}
+end
+function S:Destroy()
+ if self.Destroyed then return end
+ self:SetEnabled(false);self.Destroyed=true
+ if env.__ALLEN_PA_AUTOPLAY==self then env.__ALLEN_PA_AUTOPLAY=nil end
+end
+env.__ALLEN_PA_AUTOPLAY=S
+return S
+
+]====],
 UBGCombat=[====[
 -- Untitled Boxing Game native-action auto combat. Starts OFF; one hub switch.
 -- No simulated keyboard/mouse input, raw remote replay, stat edits or teleports.
@@ -5613,7 +5650,7 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-03-r13",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-03-r14",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or "Other experience"
 local note="Build r13 · improved boxing defense and footwork · all features OFF."
@@ -5645,6 +5682,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="pa",Section="Project: Afternight",Category="Rhythm",Name="Auto Play",Subtitle="Native botplay · taps and holds · game scoring rules",Badge="New",Game=4557322431,Key="__ALLEN_PA_AUTOPLAY",Source="PA"},
     {Id="ubgcombat",Section="Untitled Boxing Game",Category="Combat",Name="Auto Combat",Subtitle="Timed counters · stamina-aware defense · safe footwork",Badge="New",Game=UBG,Key="__ALLEN_UBG_COMBAT",Source="UBGCombat"},
     {Id="remotespy",Section="Universal",Category="Alerts",Name="Remote Spy (Cobalt)",Subtitle="Cobalt inspector GUI · ON loads / OFF unloads",Badge="Developer",Key="__ALLEN_REMOTE_SPY",Source="RemoteSpy"},
     {Id="bladeparry",Section="Blade Ball",Category="Combat",Name="Auto Parry",Subtitle="Disabled after BAC anti-cheat kick",Badge="Testing",Unavailable=true,Game=BLADE,Key="__BLADE_AUTO_PARRY",Source="BladeParry"},
