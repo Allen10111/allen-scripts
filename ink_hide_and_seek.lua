@@ -247,16 +247,8 @@ if not M or M.Destroyed then
         local tool=c:FindFirstChild("DODGE!") or bag and bag:FindFirstChild("DODGE!")
         if not tool or not tool:IsA("Tool")then M.Controllers.dodge.Status="DODGE! item required";return end
         if onCooldown(c,tool)then M.Controllers.dodge.Status="DODGE! cooldown";return end
-        local away=Vector3.new(r.Position.X-other.Position.X,0,r.Position.Z-other.Position.Z)
-        if away.Magnitude<.1 then away=-other.CFrame.LookVector end
-        away=away.Unit
-        local side=away:Cross(Vector3.yAxis)
-        local direction
-        for _,v in ipairs({away,side,-side})do direction=safeDirection(r.Position+v*8,r.Position);if direction then break end end
-        if not direction then M.Controllers.dodge.Status="No clear dodge route";return end
-        M.LastDodge=os.clock();M.EvadeDirection=direction;M.EvadeUntil=os.clock()+.18
-        M.DodgeItemUntil=os.clock()+.45
-        M.Controllers.dodge.Status="Evading knife threat"
+        M.LastDodge=os.clock()
+        M.Controllers.dodge.Status="Attempting DODGE! hotbar input"
         local generation=M.Generation
         task.delay(.04,function()
             if generation~=M.Generation or not enabled("dodge") or not active()then return end
@@ -283,7 +275,7 @@ if not M or M.Destroyed then
                 local vim=game:GetService("VirtualInputManager")
                 local number=slot:FindFirstChild("Number")
                 local names={['1']='One',['2']='Two',['3']='Three',['4']='Four',['5']='Five',
-                    ['6']='Six',['7']='Seven',['8']='Eight',['9']='Nine',['0']='Zero'}
+                    ['6']='Six',['7']='Seven',['8']='Eight',['9']='Nine',['0']='Zero',['E']='E',['T']='T',['Y']='Y'}
                 local key=number and names[number.Text]
                 if input.KeyboardEnabled and key then
                     local code=Enum.KeyCode[key]
@@ -298,9 +290,17 @@ if not M or M.Destroyed then
                         vim:SendMouseButtonEvent(center.X,center.Y,0,false,game,0)
                     end)end)
                 end
-                M.Controllers.dodge.Actions+=1;M.Controllers.dodge.Status="DODGE! input sent"
+                local state=M.Controllers.dodge
+                state.Status="Input sent · checking dodge cooldown"
+                task.delay(.45,function()
+                    if generation~=M.Generation or not enabled("dodge") or c~=LP.Character then return end
+                    if onCooldown(c,tool)then
+                        state.Actions+=1;state.Status="DODGE! cooldown observed"
+                    else state.Status="Input unconfirmed · no dodge cooldown observed"end
+                    M.DodgeStatusUntil=os.clock()+3
+                end)
             end)
-            if not ok then M.Controllers.dodge.Status="DODGE! unavailable: "..tostring(err):sub(1,75)end
+            if not ok then M.Controllers.dodge.Status="DODGE! unavailable: "..tostring(err):sub(1,110);M.DodgeStatusUntil=os.clock()+5;warn("[DODGE INPUT ERROR] "..tostring(err))end
         end)
     end
     local function peers()
@@ -467,7 +467,7 @@ if not M or M.Destroyed then
                     if threat.Expires<=os.clock() or not threat.Track.IsPlaying then self.Threats[attacker]=nil
                     elseif aimedKnifeThreat(attacker)then evade(attacker)end
                 end
-                if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife threats · outside Hide & Seek"end
+                if os.clock()-(self.LastDodge or 0)>.6 and os.clock()>(self.DodgeStatusUntil or 0)then self.Controllers.dodge.Status="Watching knife threats · outside Hide & Seek"end
             else self.Controllers.dodge.Status="DODGE! item required"end
             for mode,state in pairs(self.Controllers)do if mode~="dodge"and state.Enabled then state.Status="Waiting for Hide & Seek"end end
             return
@@ -496,7 +496,7 @@ if not M or M.Destroyed then
                 if threat.Expires<=os.clock() or not threat.Track.IsPlaying then self.Threats[attacker]=nil
                 elseif aimedKnifeThreat(attacker)then evade(attacker)end
             end
-            if not self.EvadeUntil or self.EvadeUntil<os.clock()then self.Controllers.dodge.Status="Watching knife animations + predicted attack box"end
+            if os.clock()-(self.LastDodge or 0)>.6 and os.clock()>(self.DodgeStatusUntil or 0)then self.Controllers.dodge.Status="Watching knife animations + predicted attack box"end
         end
         local collecting=collect()
         if not collecting and enabled("follow")then
