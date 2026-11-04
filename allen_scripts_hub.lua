@@ -3369,6 +3369,12 @@ end
 local CombatPolicy = (function()
 local Policy = {}
 
+function Policy.LeadTime(pingMs, frameSeconds)
+    if type(pingMs) ~= "number" or pingMs ~= pingMs then pingMs = 100 end
+    if type(frameSeconds) ~= "number" or frameSeconds ~= frameSeconds then frameSeconds = 1/60 end
+    return math.clamp(.18 + math.clamp(pingMs, 0, 400) / 2000 + math.clamp(frameSeconds, 0, .04) * 2, .18, .38)
+end
+
 function Policy.Observe(profile, now, rushing)
     local interval = profile.LastAttack and now - profile.LastAttack
     if interval and interval >= .1 and interval <= 3 then
@@ -3414,6 +3420,17 @@ return Policy
 end)()
 local prepareItemDodge, stopItemDodge, tryItemDodge, usableDodgeItem, itemDodgeStep
 local impendingThreat
+local nextPingRead = 0
+S.PingMs = 100
+
+local function updatePing(now)
+    if now < nextPingRead then return end
+    nextPingRead = now + 1
+    local ok, value = pcall(function() return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() end)
+    if ok and type(value) == "number" and value == value and value >= 0 and value <= 2000 then
+        S.PingMs = S.PingMs * .7 + value * .3
+    end
+end
 local brain = {
     Profiles = {}, Warnings = {}, Target = nil, TargetScan = 0, LastMove = 0,
     NextPunch = 0, NextJump = 0, NextDash = 0, NextSprint = 0, Side = 1,
@@ -3617,6 +3634,8 @@ local function scanCombatTarget(root, now)
 end
 
 impendingThreat = function(root, now)
+    updatePing(now)
+    local lead = CombatPolicy.LeadTime(S.PingMs, (S.FrameMs or 16.7) / 1000)
     local selected, selectedRoot, bestEta
     for player, threat in pairs(threats) do
         local _, attacker = live(threat.Character)
@@ -3625,7 +3644,7 @@ impendingThreat = function(root, now)
         else
             local speed = math.max(.1, threat.Track.Speed)
             local eta = ((threat.Contact or .16) - threat.Track.TimePosition) / speed
-            if eta >= -.12 and eta <= .2 then
+            if eta >= -.12 and eta <= lead then
                 local relative = attacker.AssemblyLinearVelocity - root.AssemblyLinearVelocity
                 if relative.Magnitude > 180 then relative = relative.Unit * 180 end
                 local size = hitboxSizes[threat.Kind]
@@ -3918,7 +3937,6 @@ tryItemDodge = function(character, root, record, now)
     end
     record.Used = true
     S.ItemRequests += 1
-    itemState.ActiveUntil = now + itemDefinition.Window
     S.ItemStatus = "Dodge item requested · waiting for native confirmation"
     local generation = S.Generation
     task.delay(.05, function()
@@ -4331,6 +4349,8 @@ function S:SetEnabled(enabled)
     local elapsed = 0
     nextScan, nextSlow = 0, 0
     connections[#connections + 1] = Run.Heartbeat:Connect(function(dt)
+        local frameMs = dt * 1000
+        S.FrameMs = S.FrameMs and S.FrameMs * .9 + frameMs * .1 or frameMs
         elapsed += dt
         if MODE ~= "combat" and MODE ~= "dodge" and MODE ~= "dodgeitem" and elapsed < (MODE == "qte" and 1/30 or .1) then return end
         elapsed = 0
@@ -4367,6 +4387,7 @@ function S:GetSnapshot()
         Navigation = self.Navigation, QTEPresses = self.Actions,
         ItemRequests = self.ItemRequests, ItemAccepted = self.ItemAccepted, ItemDodged = self.ItemDodged,
         ItemMissed = self.ItemMissed, ItemStatus = self.ItemStatus,
+        PingMs = self.PingMs, FrameMs = self.FrameMs,
         DamageObserved = self.DamageObserved, MaxStepMs = self.MaxStepMs}
 end
 function S:Destroy()
