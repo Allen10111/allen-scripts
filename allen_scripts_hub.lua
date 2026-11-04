@@ -2821,6 +2821,11 @@ end
 local function stopAmmoTrip(trip)
     if ammoTrip ~= trip then return end
     ammoTrip = nil
+    if trip.SprintInfo and trip.SprintInfo.Parent then
+        local input = game:GetService("UserInputService")
+        local shiftHeld = input:IsKeyDown(Enum.KeyCode.LeftShift) or input:IsKeyDown(Enum.KeyCode.RightShift)
+        trip.SprintInfo:Fire({RunningEnabled = true, State = shiftHeld})
+    end
     local humanoid = trip.Character:FindFirstChildOfClass("Humanoid")
     if player.Character == trip.Character and humanoid and trip.Root.Parent then
         humanoid:MoveTo(trip.Root.Position)
@@ -2869,6 +2874,12 @@ local function collectAmmo(root, now)
     if not nearest then return end
     attemptedPrompts[nearest] = now
     local trip = {Root = root, Character = player.Character, Origin = root.Position}
+    local main = trip.Character:FindFirstChild("Main")
+    local info = main and main:FindFirstChild("Info")
+    if info and info:IsA("BindableEvent") then
+        trip.SprintInfo = info
+        info:Fire({RunningEnabled = true, State = true})
+    end
     ammoTrip = trip
     task.spawn(function()
         local ok, err = pcall(function()
