@@ -3135,7 +3135,7 @@ local Data = require(RS.Modules.Data.DataManager).client
 local MODE = MATCH_MODE_LITERAL
 local key = "__ALLEN_MATCH_" .. MODE
 if env[key] then env[key]:Destroy() end
-local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0}
+local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0, QTEEnabled = true}
 local connections, markers, watches, threats = {}, {}, {}, {}
 local ui, label, folder, dashHandler
 local nextScan, nextAction, nextSlow = 0, 0, 0
@@ -3536,6 +3536,11 @@ local function prepareAdvancedCombat()
     local controls = require(module):GetControls()
     brain.Controls = controls
     brain.Desired = Vector3.zero
+    brain.MapHazards = {}
+    for _, name in ipairs({"FallKillPart", "FallPart"}) do
+        local part = workspace:FindFirstChild(name)
+        if part and part:IsA("BasePart") then brain.MapHazards[#brain.MapHazards + 1] = part end
+    end
     brain.RenderName = "AllenSkyCombatMovement"
     Run:BindToRenderStep(brain.RenderName, Enum.RenderPriority.Input.Value + 1, function()
         if not S.Enabled then return end
@@ -3552,6 +3557,11 @@ local function prepareAdvancedCombat()
     if external and external.Enabled then
         external:SetEnabled(false)
         brain.ExternalDodge, brain.ExternalGeneration = external, external.Generation
+    end
+    local qte = env.__ALLEN_MATCH_qte
+    if qte and qte.Enabled then
+        qte:SetEnabled(false)
+        brain.ExternalQte, brain.ExternalQteGeneration = qte, qte.Generation
     end
     for _, child in ipairs(workspace:GetChildren()) do watchWarning(child) end
     brain.WarningConnection = workspace.ChildAdded:Connect(watchWarning)
@@ -3624,14 +3634,89 @@ local function routeClear(root, vector, target, length)
     local direction = vector.Unit
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
+    params.RespectCanCollide = true
     params.FilterDescendantsInstances = target and {LP.Character, target} or {LP.Character}
     local distance = length or 4
     if workspace:Raycast(root.Position, direction * distance, params) then return false end
     for _, offset in ipairs({math.min(3, distance), distance}) do
         local floor = workspace:Raycast(root.Position + direction * offset, Vector3.new(0, -10, 0), params)
-        if not floor or floor.Normal.Y < .6 then return false end
+        if not floor or floor.Normal.Y < .6 or floor.Instance.Name == "FallKillPart" or floor.Instance.Name == "FallPart" then return false end
+        if brain.MapHazards and #brain.MapHazards > 0 then
+            local hazards = RaycastParams.new()
+            hazards.FilterType = Enum.RaycastFilterType.Include
+            hazards.FilterDescendantsInstances = brain.MapHazards
+            local from = root.Position + direction * offset
+            if workspace:Raycast(from, floor.Position - from, hazards) then return false end
+        end
     end
     return true
+end
+
+local function requestJump(humanoid, now)
+    local height = humanoid.UseJumpPower and humanoid.JumpPower ^ 2 / (2 * math.max(.1, workspace.Gravity)) or humanoid.JumpHeight
+    if now < brain.NextJump or humanoid.FloorMaterial == Enum.Material.Air
+        or not height or height <= 0
+        or States.HasAny(LP.Character, {"JumpDisabled", "Stunned", "Ragdolled", "MovementInputDisabled"}) then return false end
+    humanoid.Jump = true
+    brain.JumpUntil = now + .15
+    brain.NextJump = now + 1.1
+    S.JumpRequests += 1
+    return true
+end
+
+local function planMapRoute(humanoid, root, destination, now)
+    if brain.PathBusy or now < (brain.NextPath or 0) then return end
+    brain.NextPath = now + 1.2
+    local job = {}
+    brain.PathBusy = job
+    local character, generation = LP.Character, S.Generation
+    task.spawn(function()
+        local height = humanoid.UseJumpPower and humanoid.JumpPower ^ 2 / (2 * math.max(.1, workspace.Gravity)) or humanoid.JumpHeight
+        local path = game:GetService("PathfindingService"):CreatePath({AgentRadius = 2, AgentHeight = 5,
+            AgentCanJump = height >= 3, AgentCanClimb = true, WaypointSpacing = 4})
+        local ok = pcall(path.ComputeAsync, path, root.Position, destination)
+        if brain.PathBusy ~= job then return end
+        brain.PathBusy = nil
+        if not S.Enabled or generation ~= S.Generation or LP.Character ~= character then return end
+        if not brain.RequestedGoal or (brain.RequestedGoal - destination).Magnitude > 6 then brain.NextPath = 0; return end
+        if brain.PathBlocked then brain.PathBlocked:Disconnect(); brain.PathBlocked = nil end
+        if ok and path.Status == Enum.PathStatus.Success then
+            brain.PathPoints, brain.PathIndex, brain.PathGoal = path:GetWaypoints(), 2, destination
+            brain.PathAt = os.clock()
+            brain.PathBlocked = path.Blocked:Connect(function(index)
+                if index >= (brain.PathIndex or 1) then brain.PathPoints = nil; brain.NextPath = 0 end
+            end)
+        else brain.PathPoints = nil end
+    end)
+end
+
+local function mapDirection(humanoid, root, target, toward, now)
+    brain.RequestedGoal = target.Position
+    if routeClear(root, toward, target.Parent, math.min(6, (target.Position - root.Position).Magnitude))
+        and math.abs(target.Position.Y - root.Position.Y) < 3 then S.Navigation = "direct"; return toward end
+    if not brain.PathPoints or not brain.PathGoal or (brain.PathGoal - target.Position).Magnitude > 6
+        or now - (brain.PathAt or 0) > 3 then
+        brain.PathPoints = nil
+        planMapRoute(humanoid, root, target.Position, now)
+    end
+    local points = brain.PathPoints
+    local index = brain.PathIndex or 2
+    if points then
+        while points[index] and (points[index].Position - root.Position).Magnitude < 3 do index += 1 end
+        brain.PathIndex = index
+        local point = points[index]
+        if point then
+            local direction = point.Position - root.Position
+            direction = Vector3.new(direction.X, 0, direction.Z)
+            if direction.Magnitude > .1 then
+                if point.Action == Enum.PathWaypointAction.Jump then requestJump(humanoid, now) end
+                S.Navigation = "path"
+                return direction.Unit
+            end
+        end
+    end
+    S.Navigation = brain.PathBusy and "planning" or "blocked"
+    return toward
 end
 
 local function jumpObstacle(humanoid, root, direction, target, now)
@@ -3647,11 +3732,8 @@ local function jumpObstacle(humanoid, root, direction, target, now)
     local upper = workspace:Raycast(root.Position + Vector3.new(0, math.min(3, height - 1), 0), forward, params)
     local landing = workspace:Raycast(root.Position + forward + Vector3.new(0, 3, 0), Vector3.new(0, -12, 0), params)
     if lower and not upper and landing and landing.Normal.Y > .6 then
-        humanoid.Jump = true
-        brain.JumpUntil = now + .15
+        if not requestJump(humanoid, now) then return false end
         brain.Desired = direction.Unit
-        brain.NextJump = now + 1.1
-        S.JumpRequests += 1
         humanoid:Move(direction.Unit, false)
         return true
     end
@@ -3770,6 +3852,7 @@ local function combatStep(now)
         SafeLongRoute = routeClear(root, toward, player.Character, 20)
     }
     local decision = CombatPolicy.Decide(snapshot)
+    S.Navigation = "local footwork"
     S.Decision, S.TargetName, S.ObservedAttacks = decision, player.Name, profile.Attacks
     if brain.Locomotion and now >= brain.NextSprint then
         brain.NextSprint = now + .25
@@ -3790,7 +3873,8 @@ local function combatStep(now)
     elseif decision == "retreat" or decision == "space" then
         moveCombat(humanoid, root, {-toward + side * sideSign * .3, side * sideSign, -side * sideSign}, player.Character, now)
     elseif decision == "approach" or decision == "approach_dash" then
-        move = moveCombat(humanoid, root, {toward, toward + side * .7, toward - side * .7}, player.Character, now)
+        local route = mapDirection(humanoid, root, targetRoot, toward, now)
+        move = moveCombat(humanoid, root, {route, route + side * .7, route - side * .7}, player.Character, now)
         if decision == "approach_dash" and move.Magnitude > .1 then
             requestCombatDash(humanoid, root, move, player.Character, {}, now)
         end
@@ -3824,12 +3908,17 @@ local function stopAdvancedCombat()
     restoreCombatCharacter()
     if brain.WarningConnection then brain.WarningConnection:Disconnect(); brain.WarningConnection = nil end
     brain.PendingPunch, brain.PendingDash, brain.PendingOutcome = nil, nil, nil
+    brain.PathBusy, brain.PathPoints = nil, nil
+    if brain.PathBlocked then brain.PathBlocked:Disconnect(); brain.PathBlocked = nil end
     table.clear(brain.Warnings)
     local external = brain.ExternalDodge
     if external and not external.Destroyed and external.Generation == brain.ExternalGeneration and not external.Enabled then
         external:SetEnabled(true)
     end
     brain.ExternalDodge = nil
+    local qte = brain.ExternalQte
+    if qte and not qte.Destroyed and qte.Generation == brain.ExternalQteGeneration and not qte.Enabled then qte:SetEnabled(true) end
+    brain.ExternalQte = nil
 end
 
 
@@ -3914,7 +4003,7 @@ local function qteStep()
             end
         end
     end
-    status("QTE watching " .. count .. " prompts · " .. S.Actions .. " native presses")
+    if MODE == "qte" or count > 0 then status("QTE watching " .. count .. " prompts · " .. S.Actions .. " native presses") end
 end
 
 local function rewardStep()
@@ -3979,7 +4068,6 @@ local function trackerStep()
 end
 
 local function stop()
-    if MODE == "combat" then stopAdvancedCombat() end
     for _, c in ipairs(connections) do c:Disconnect() end
     table.clear(connections)
     for _, w in pairs(watches) do w.Connection:Disconnect() end
@@ -3988,6 +4076,7 @@ local function stop()
     table.clear(markers)
     table.clear(qteCallbacks)
     if qteLibrary and qteLibrary.new == wrappedQteNew then qteLibrary.new = originalQteNew end
+    if MODE == "combat" then stopAdvancedCombat() end
     if ui then ui:Destroy(); ui, label, folder = nil, nil, nil end
     local h, r = live(S.Moving)
     if h and S.Moving == LP.Character then h:MoveTo(r.Position) end
@@ -3996,6 +4085,12 @@ end
 
 function S:SetEnabled(enabled)
     self.Generation += 1
+    local full = MODE == "qte" and env.__ALLEN_MATCH_combat
+    if full and full.Enabled and not full.Destroyed then
+        full.QTEEnabled = enabled == true
+        self.Status = "Managed by Full Auto Combat"
+        return
+    end
     self.Enabled = false
     stop()
     if not enabled or self.Destroyed then self.Status = "Off"; return end
@@ -4005,7 +4100,7 @@ function S:SetEnabled(enabled)
     if MODE == "dodge" then dashHandler = nativeDash(); assert(dashHandler, "Native dash not ready") end
     if MODE == "qte" then prepareQte() end
     if MODE == "combat" then
-        local ok, err = pcall(prepareAdvancedCombat)
+        local ok, err = pcall(function() prepareAdvancedCombat(); prepareQte() end)
         if not ok then stop(); error(err, 0) end
     end
     self.Enabled = true
@@ -4026,7 +4121,7 @@ function S:SetEnabled(enabled)
         local now = os.clock()
         local started = os.clock()
         local ok, err = pcall(function()
-            if MODE == "combat" then combatStep(now)
+            if MODE == "combat" then combatStep(now); if self.QTEEnabled then qteStep() end
             elseif MODE == "dodge" then defenseStep(now)
             elseif MODE == "qte" then qteStep(now)
             elseif now >= nextSlow then
@@ -4042,12 +4137,15 @@ function S:SetEnabled(enabled)
 end
 
 function S:GetSnapshot()
+    local full = MODE == "qte" and env.__ALLEN_MATCH_combat
+    if full and full.Enabled and not full.Destroyed then return {Enabled = full.QTEEnabled, Status = "Managed by Full Auto Combat"} end
     return {Enabled = self.Enabled, Status = self.Status, Actions = self.Actions,
         Decision = self.Decision, Target = self.TargetName, ObservedAttacks = self.ObservedAttacks,
         AttackRequests = self.AttackRequests, DashRequests = self.DashRequests, JumpRequests = self.JumpRequests,
         ConfirmedAttacks = self.ConfirmedAttacks, ConfirmedDashes = self.ConfirmedDashes,
         DashPunchRequests = self.DashPunchRequests, ConfirmedDashPunches = self.ConfirmedDashPunches,
         MotorFrames = self.MotorFrames, MovedStuds = self.MovedStuds, ConfirmedJumps = self.ConfirmedJumps,
+        Navigation = self.Navigation, QTEPresses = self.Actions,
         DamageObserved = self.DamageObserved, MaxStepMs = self.MaxStepMs}
 end
 function S:Destroy()
@@ -6944,10 +7042,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r17",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r18",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r17 · Sky Fighters movement fix · all features OFF."
+local note="Build r18 · Sky Fighters map navigation and QTE · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -6978,7 +7076,7 @@ end
 local features={
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights and health",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
     {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitbox geometry · Fists / pole",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
-    {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive spacing · dash-punches · native warnings · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
+    {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive combat · map navigation · auto QTE · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
     {Id="match_qte",Section="Sky Fighters",Category="Minigames",Name="Auto QTE",Subtitle="Native shrinking-circle prompt timing",Game=8366716517,Key="__ALLEN_MATCH_qte",Source="Match",Mode="qte"},
     {Id="match_rewards",Section="Sky Fighters",Category="Utility",Name="Auto Claim Playtime Rewards",Subtitle="Claims eligible playtime rewards",Game=8366716517,Key="__ALLEN_MATCH_rewards",Source="Match",Mode="rewards"},
     {Id="match_cooldown",Section="Sky Fighters",Category="Alerts",Name="Cooldown Display",Subtitle="Native dash readiness and available power timers",Game=8366716517,Key="__ALLEN_MATCH_cooldown",Source="Match",Mode="cooldown"},
@@ -7047,6 +7145,10 @@ for _,feature in ipairs(features)do
     end
 end
 local function snapshot(feature)
+    if feature.Id=="match_qte" then
+        local full=env.__ALLEN_MATCH_combat
+        if full and full.Enabled and not full.Destroyed then return {Enabled=full.QTEEnabled,Status="Managed by Full Auto Combat"}end
+    end
     if feature.MobileUnsupported and UIS.TouchEnabled then return {Enabled=false,Status="Disabled on mobile after crash report"}end
     if feature.PCOnly and not UIS.KeyboardEnabled then return {Enabled=false,Status="PC only"} end
     if feature.Unavailable then return {Enabled=false,Status="Unavailable"} end
@@ -7130,7 +7232,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R17",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R18",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
