@@ -3153,8 +3153,11 @@ local rewardBusy = false
 local qteCallbacks = {}
 local attemptedQtes = setmetatable({}, {__mode = "k"})
 local attackIds = {}
+local attackContacts = {}
 local observeSwing
-local hitboxSizes = {Fists = Vector3.new(6, 6, 6), Pole = Vector3.new(7.5, 6, 7.5), Katana = Vector3.new(6, 6, 6)}
+local hitboxSizes = {Fists = Vector3.new(6, 6, 6), Pole = Vector3.new(7.5, 6, 7.5),
+    Katana = Vector3.new(6, 6, 6), Scythe = Vector3.new(6, 6, 6),
+    Striker = Vector3.new(6, 6, 6), Gun = Vector3.new(6, 6, 6)}
 local hitboxOffset = CFrame.new(0, 1, -4)
 
 local function overlapsCharacter(cf, size, character)
@@ -3179,7 +3182,10 @@ end
 for _, profile in ipairs({
     {Power = "Fists", Move = "Fists", Kind = "Fists"},
     {Power = "Pole", Move = "Pole", Kind = "Pole"},
-    {Power = "Styles", Move = "Katana", Kind = "Katana"}
+    {Power = "Styles", Move = "Katana", Kind = "Katana"},
+    {Power = "Styles", Move = "Scythe", Kind = "Scythe"},
+    {Power = "Styles", Move = "Striker", Kind = "Striker"},
+    {Power = "Styles", Move = "Gun", Kind = "Gun"}
 }) do
     local powers = gameplay:FindFirstChild("Powers")
     local power = powers and powers:FindFirstChild(profile.Power)
@@ -3191,7 +3197,15 @@ for _, profile in ipairs({
         for _, animation in ipairs(animations:GetChildren()) do
             if animation:IsA("Animation") and animation.Name:match("^M%d+$") then
                 local id = animation.AnimationId:match("%d+")
-                if id then attackIds[id] = profile.Kind end
+                if id then
+                    attackIds[id] = profile.Kind
+                    if profile.Kind == "Gun" then
+                        local index = tonumber(animation.Name:match("%d+"))
+                        local times = {.3166666626930237, .28333333134651184, .38333332538604736}
+                        local rates = {1.5, 2.15, 1.8}
+                        if times[index] then attackContacts[id] = times[index] * rates[index] end
+                    end
+                end
             end
         end
     end
@@ -3252,9 +3266,11 @@ local function scanThreats()
                     watches[player] = {Animator = animator, Connection = animator.AnimationPlayed:Connect(function(track)
                         local id = track.Animation and track.Animation.AnimationId:match("%d+")
                         if attackIds[id] then
-                            local contact = .16
-                            local ok, marker = pcall(track.GetTimeOfKeyframe, track, "Start")
-                            if ok and type(marker) == "number" and marker >= 0 and marker < 1 then contact = marker end
+                            local contact = attackContacts[id] or .16
+                            if not attackContacts[id] then
+                                local ok, marker = pcall(track.GetTimeOfKeyframe, track, "Start")
+                                if ok and type(marker) == "number" and marker >= 0 and marker < 1 then contact = marker end
+                            end
                             local threat = {Track = track, Character = character, Kind = attackIds[id], Used = false, At = os.clock(), Contact = contact}
                             threats[player] = threat
                             if observeSwing then observeSwing(player, threat) end
@@ -4142,7 +4158,7 @@ local function defenseStep(now)
     local humanoid, root = live(character)
     if not root or blocked(character) then status("Defense waiting for recovery"); return end
     local threat, other = activeThreat(root)
-    if not threat then status("Watching fists / pole / katana hitbox overlap"); return end
+    if not threat then status("Watching fighting-style hitboxes"); return end
     S.DefendingUntil = now + .2
     status("Incoming melee · " .. other.Parent.Name)
     if now < nextAction or not dashHandler then return end
@@ -7273,10 +7289,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r21",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r22",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r21 · Sky Fighters Katana dodge detection · all features OFF."
+local note="Build r22 · Sky Fighters fighting-style detection · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7305,9 +7321,9 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Use Dodge Item",Subtitle="Flowstate Dodge · Fists / Pole / Katana hitboxes",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
+    {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Use Dodge Item",Subtitle="Flowstate Dodge · all current fighting styles",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
-    {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitbox geometry · Fists / Pole / Katana",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
+    {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitboxes · all current fighting styles",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
     {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive combat · map navigation · auto QTE · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
     {Id="match_qte",Section="Sky Fighters",Category="Minigames",Name="Auto QTE",Subtitle="Native shrinking-circle prompt timing",Game=8366716517,Key="__ALLEN_MATCH_qte",Source="Match",Mode="qte"},
     {Id="match_rewards",Section="Sky Fighters",Category="Utility",Name="Auto Claim Playtime Rewards",Subtitle="Claims eligible playtime rewards",Game=8366716517,Key="__ALLEN_MATCH_rewards",Source="Match",Mode="rewards"},
@@ -7464,7 +7480,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R21",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R22",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
