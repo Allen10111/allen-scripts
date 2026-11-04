@@ -3130,12 +3130,17 @@ local LP = Players.LocalPlayer
 local env = getgenv()
 local gameplay = RS.Modules.Gameplay
 local States = require(gameplay.CharacterStateController)
-local Event = require(RS.Config.HalloweenEvent)
-local Data = require(RS.Modules.Data.DataManager).client
 local MODE = MATCH_MODE_LITERAL
+local Event, Data
+if MODE == "bloodmoon" or MODE == "candy" then
+    local config = RS.Config:FindFirstChild("HalloweenEvent")
+    assert(config, "Halloween trackers are unavailable in this Sky Fighters place")
+    Event = require(config)
+    if MODE == "candy" then Data = require(RS.Modules.Data.DataManager).client end
+end
 local key = "__ALLEN_MATCH_" .. MODE
 if env[key] then env[key]:Destroy() end
-local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0, QTEEnabled = true}
+local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0, QTEEnabled = true, ItemDodgeEnabled = true}
 local connections, markers, watches, threats = {}, {}, {}, {}
 local ui, label, folder, dashHandler
 local nextScan, nextAction, nextSlow = 0, 0, 0
@@ -3152,7 +3157,10 @@ local function overlapsCharacter(cf, size, character)
     local params = OverlapParams.new()
     params.FilterType = Enum.RaycastFilterType.Include
     params.FilterDescendantsInstances = {character}
-    return #workspace:GetPartBoundsInBox(cf, size, params) > 0
+    for _, part in ipairs(workspace:GetPartBoundsInBox(cf, size, params)) do
+        if part:FindFirstAncestorOfClass("Model") == character then return true end
+    end
+    return false
 end
 
 local function threatOverlaps(threat, attackerRoot, character)
@@ -3199,7 +3207,7 @@ local function overlay()
     if MODE ~= "esp" then
         label = Instance.new("TextLabel")
         label.AnchorPoint = Vector2.new(0.5, 0)
-        label.Position = UDim2.fromScale(0.5, ({combat=.10, dodge=.15, qte=.20, rewards=.25, cooldown=.30, bloodmoon=.35, candy=.40})[MODE] or .1)
+        label.Position = UDim2.fromScale(0.5, ({combat=.10, dodge=.15, qte=.20, rewards=.25, cooldown=.30, bloodmoon=.35, candy=.40, dodgeitem=.45})[MODE] or .1)
         label.Size = UDim2.new(.8, 0, 0, 25)
         label.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
         label.BackgroundTransparency = .25
@@ -3374,7 +3382,9 @@ end
 
 function Policy.Decide(s)
     if s.Blocked or not s.Target then return "recover" end
+    if s.ItemWindow and not s.Warning then return "dodge_window" end
     if s.Warning or s.Threat then
+        if s.Threat and not s.Warning and s.CanItem and s.FreshThreat then return "use_dodge_item" end
         if s.CanDash and s.FreshThreat then return "evade_dash" end
         return "evade"
     end
@@ -3402,6 +3412,8 @@ end
 return Policy
 
 end)()
+local prepareItemDodge, stopItemDodge, tryItemDodge, usableDodgeItem, itemDodgeStep
+local impendingThreat
 local brain = {
     Profiles = {}, Warnings = {}, Target = nil, TargetScan = 0, LastMove = 0,
     NextPunch = 0, NextJump = 0, NextDash = 0, NextSprint = 0, Side = 1,
@@ -3563,8 +3575,14 @@ local function prepareAdvancedCombat()
         qte:SetEnabled(false)
         brain.ExternalQte, brain.ExternalQteGeneration = qte, qte.Generation
     end
+    local item = env.__ALLEN_MATCH_dodgeitem
+    if item and item.Enabled then
+        item:SetEnabled(false)
+        brain.ExternalItem, brain.ExternalItemGeneration = item, item.Generation
+    end
     for _, child in ipairs(workspace:GetChildren()) do watchWarning(child) end
     brain.WarningConnection = workspace.ChildAdded:Connect(watchWarning)
+    prepareItemDodge()
 end
 
 local function warningThreat(root)
@@ -3598,7 +3616,7 @@ local function scanCombatTarget(root, now)
     return chosen
 end
 
-local function impendingThreat(root, now)
+impendingThreat = function(root, now)
     local selected, selectedRoot, bestEta
     for player, threat in pairs(threats) do
         local _, attacker = live(threat.Character)
@@ -3769,6 +3787,175 @@ local function requestCombatDash(humanoid, root, direction, target, record, now)
     return true
 end
 
+local itemState = {NextAttempt = 0, Dispatcher = nil, Character = nil, NextInspect = 0, ActiveUntil = 0}
+local itemDefinition = require(gameplay.Powers.Flowstate.Definition).Dodge
+S.ItemRequests, S.ItemAccepted, S.ItemDodged, S.ItemMissed = 0, 0, 0, 0
+
+local function ownedDodgeItem(character)
+    for _, container in ipairs({character, LP.Backpack}) do
+        for _, tool in ipairs(container:GetChildren()) do
+            if tool:IsA("Tool") and tool:GetAttribute("PowerId") == "Flowstate"
+                and (tool:GetAttribute("MoveId") == "Dodge" or tool.Name == "Dodge") then return tool end
+        end
+    end
+end
+
+local function findItemDispatcher(character, now)
+    if itemState.Character ~= character then
+        itemState.Character, itemState.Dispatcher, itemState.NextInspect = character, nil, 0
+    end
+    if itemState.Character == character and itemState.Dispatcher then return itemState.Dispatcher end
+    if now < itemState.NextInspect then return end
+    itemState.NextInspect = now + 2
+    if type(getgc) ~= "function" then S.ItemStatus = "Executor needs getgc support"; return end
+    local endpoint = RS.Remotes.Gameplay.Combat.HotbarToolInput
+    local found
+    for _, fn in ipairs(getgc()) do
+        if type(fn) == "function" and (type(islclosure) ~= "function" or islclosure(fn)) and debug.info(fn, "n") == "dispatchHotbarInput" then
+            local source = getfenv(fn).script
+            if source and source.Name == "BackpackUI" then
+                local values = debug.getupvalues(fn)
+                if values[4] == LP and values[5] == character and values[7] == endpoint then
+                    if found then S.ItemStatus = "Ambiguous native hotbar dispatcher"; return end
+                    found = fn
+                end
+            end
+        end
+    end
+    itemState.Dispatcher, itemState.Character = found, character
+    return found
+end
+
+local function restoreItemEquip()
+    local lease = itemState.Equip
+    itemState.Equip = nil
+    if not lease or LP.Character ~= lease.Character then return end
+    local humanoid = lease.Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 or lease.Tool.Parent ~= lease.Character then return end
+    if lease.Previous and lease.Previous.Parent == LP.Backpack then humanoid:EquipTool(lease.Previous)
+    else humanoid:UnequipTools() end
+end
+
+local function itemNotify(command)
+    if not S.Enabled or not itemState.Pending or os.clock() - itemState.Pending.At > 2 then return end
+    local now = os.clock()
+    if command == "Accepted" and not itemState.Pending.Accepted then
+        itemState.Pending.Accepted = true
+        itemState.ActiveUntil = now + itemDefinition.Window
+        S.ItemAccepted += 1
+        restoreItemEquip()
+    elseif command == "Dodged" then
+        S.ItemDodged += 1
+        itemState.ActiveUntil = 0
+        itemState.NextAttempt = now + itemDefinition.SuccessCooldown
+        itemState.Pending = nil
+        restoreItemEquip()
+    elseif command == "Missed" then
+        S.ItemMissed += 1
+        itemState.ActiveUntil = 0
+        itemState.NextAttempt = now + itemDefinition.MissCooldown
+        itemState.Pending = nil
+        restoreItemEquip()
+    end
+end
+
+prepareItemDodge = function()
+    local character = LP.Character
+    if character and ownedDodgeItem(character) then findItemDispatcher(character, os.clock()) end
+end
+
+local function bindItemFeedback(tool)
+    if itemState.NotifyTool == tool and itemState.NotifyConnection and itemState.NotifyConnection.Connected then return true end
+    if itemState.NotifyConnection then itemState.NotifyConnection:Disconnect(); itemState.NotifyConnection = nil end
+    local runtime = tool:FindFirstChild("PowerRuntimeRemotes")
+    local notify = runtime and runtime:FindFirstChild("Notify")
+    if not notify or not notify:IsA("RemoteEvent") then return false end
+    itemState.NotifyTool = tool
+    itemState.NotifyConnection = notify.OnClientEvent:Connect(itemNotify)
+    return true
+end
+
+usableDodgeItem = function(character, now)
+    if itemState.Pending and now - itemState.Pending.At > 1.2 then itemState.Pending = nil; restoreItemEquip() end
+    if not character or blocked(character) then return end
+    local tool = ownedDodgeItem(character)
+    S.ItemWindowActive = now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"})
+    if not tool then S.ItemStatus = "Flowstate Dodge item required"; S.ItemReady = false; return end
+    if not bindItemFeedback(tool) then S.ItemStatus = "Waiting for native Dodge item runtime"; S.ItemReady = false; return end
+    local ready = not tool:GetAttribute("OnCooldown") and tool:GetAttribute("CombatRulesBlocked") ~= true
+        and tool.Enabled and now >= itemState.NextAttempt
+        and not itemState.Pending and not States.HasAny(character, {"Dodging"})
+    S.ItemReady = ready == true
+    S.ItemStatus = ready and "Dodge item ready" or "Native dodge item window / cooldown"
+    return ready and tool or nil
+end
+
+tryItemDodge = function(character, root, record, now)
+    if not record or record.Used or record.ItemAttempted then return false end
+    local tool = usableDodgeItem(character, now)
+    if not tool then return false end
+    local current = impendingThreat(root, now)
+    if current ~= record then return false end
+    local dispatcher = findItemDispatcher(character, now)
+    if not dispatcher then S.ItemStatus = "Native hotbar dispatcher not ready"; return false end
+    local quick = tool:GetAttribute("QuickUse") == true
+    if tool.Parent ~= character and not quick then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        itemState.Equip = {Character = character, Previous = character:FindFirstChildOfClass("Tool"), Tool = tool}
+        humanoid:EquipTool(tool)
+        if tool.Parent ~= character then restoreItemEquip(); return false end
+    end
+    record.ItemAttempted = true
+    local pending = {At = now, Tool = tool, Dispatcher = dispatcher, Quick = quick}
+    itemState.Pending = pending
+    itemState.NextAttempt = now + itemDefinition.Window + .15
+    local ok, accepted = pcall(dispatcher, tool, "Begin", Enum.UserInputType.MouseButton1, quick)
+    if not ok or accepted ~= true then
+        itemState.Pending = nil
+        restoreItemEquip()
+        S.ItemStatus = ok and "Native hotbar declined activation" or "Native hotbar activation failed"
+        return false
+    end
+    record.Used = true
+    S.ItemRequests += 1
+    itemState.ActiveUntil = now + itemDefinition.Window
+    S.ItemStatus = "Dodge item requested · waiting for native confirmation"
+    local generation = S.Generation
+    task.delay(.05, function()
+        if S.Enabled and S.Generation == generation and tool.Parent then
+            pcall(dispatcher, tool, "End", Enum.UserInputType.MouseButton1, quick)
+        end
+    end)
+    return true
+end
+
+itemDodgeStep = function(now)
+    local full = env.__ALLEN_MATCH_combat
+    if full and full.Enabled then status("Full Auto Combat manages the dodge item"); return end
+    if now >= nextScan then nextScan = now + .4; scanThreats() end
+    local character = LP.Character
+    local _, root = live(character)
+    if not root then status("Dodge item waiting for character"); return end
+    usableDodgeItem(character, now)
+    local record = impendingThreat(root, now)
+    if record then tryItemDodge(character, root, record, now) end
+    status(S.ItemStatus or "Watching native hitbox threats")
+end
+
+stopItemDodge = function()
+    local pending = itemState.Pending
+    if pending and pending.Tool.Parent then
+        pcall(pending.Dispatcher, pending.Tool, "End", Enum.UserInputType.MouseButton1, pending.Quick)
+    end
+    restoreItemEquip()
+    if itemState.NotifyConnection then itemState.NotifyConnection:Disconnect(); itemState.NotifyConnection = nil end
+    itemState.NotifyTool = nil
+    itemState.Pending = nil
+    itemState.ActiveUntil = 0
+    S.ItemReady, S.ItemWindowActive = false, false
+end
+
+
 local function combatStep(now)
     brain.PreviousDesired = brain.Desired
     brain.Desired = Vector3.zero
@@ -3777,6 +3964,7 @@ local function combatStep(now)
     if not root then status("Combat waiting for character"); return end
     bindCombatCharacter(character, humanoid)
     observeOutcome(humanoid, now)
+    local readyDodgeItem = usableDodgeItem(character, now)
     if now >= nextScan then
         nextScan = now + .4
         scanThreats()
@@ -3825,7 +4013,7 @@ local function combatStep(now)
         end
         if tool then break end
     end
-    if tool and tool.Parent ~= character then humanoid:EquipTool(tool) end
+    if tool and tool.Parent ~= character and not itemState.Equip then humanoid:EquipTool(tool) end
     local size = tool and hitboxSizes[tool.Name]
     local canHit = size and overlapsCharacter(root.CFrame * hitboxOffset, size, player.Character) or false
     local targetVelocity = Vector3.new(targetRoot.AssemblyLinearVelocity.X, 0, targetRoot.AssemblyLinearVelocity.Z)
@@ -3845,9 +4033,12 @@ local function combatStep(now)
     local snapshot = {
         Target = true, Blocked = false, Threat = threat ~= nil, Warning = warning ~= nil,
         FreshThreat = warning and not warning.Used or threat and not threat.Used or false,
+        CanItem = S.ItemDodgeEnabled and readyDodgeItem ~= nil,
+        ItemWindow = now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"}),
         CanDash = not blocked(character) and now >= brain.NextDash and dashReady(), Health = humanoid.Health / math.max(1, humanoid.MaxHealth),
         NearbyEnemies = nearby, TargetRushing = rushing, Distance = flat.Magnitude, Reach = size and size.Z / 2 + 4 or 6,
-        CanHit = canHit, CanPunch = tool ~= nil and not blocked(character) and not tool:GetAttribute("OnCooldown") and now >= brain.NextPunch,
+        CanHit = canHit, CanPunch = tool ~= nil and tool.Parent == character and not itemState.Equip
+            and not blocked(character) and not tool:GetAttribute("OnCooldown") and now >= brain.NextPunch,
         ExpectedAttackSoon = expected == true, OwnDashing = ownDashing, TargetVulnerable = recovering == true,
         SafeLongRoute = routeClear(root, toward, player.Character, 20)
     }
@@ -3860,7 +4051,15 @@ local function combatStep(now)
         brain.Locomotion:ToggleSprint(true)
     end
     local move
-    if decision == "evade_dash" or decision == "evade" or decision == "sidestep" then
+    if decision == "use_dodge_item" then
+        if tryItemDodge(character, root, threat, now) then
+            brain.Desired = Vector3.zero
+            humanoid:Move(Vector3.zero, false)
+        else moveCombat(humanoid, root, {side * sideSign, -side * sideSign, away}, player.Character, now) end
+    elseif decision == "dodge_window" then
+        brain.Desired = Vector3.zero
+        humanoid:Move(Vector3.zero, false)
+    elseif decision == "evade_dash" or decision == "evade" or decision == "sidestep" then
         move = moveCombat(humanoid, root, warning and {away, side * sideSign, -side * sideSign}
             or {side * sideSign, -side * sideSign, away}, player.Character, now)
         if decision == "evade_dash" and move.Magnitude > .1 then
@@ -3902,6 +4101,7 @@ local function combatStep(now)
 end
 
 local function stopAdvancedCombat()
+    stopItemDodge()
     brain.Desired = Vector3.zero
     if brain.RenderName then Run:UnbindFromRenderStep(brain.RenderName); brain.RenderName = nil end
     brain.Controls = nil
@@ -3919,12 +4119,17 @@ local function stopAdvancedCombat()
     local qte = brain.ExternalQte
     if qte and not qte.Destroyed and qte.Generation == brain.ExternalQteGeneration and not qte.Enabled then qte:SetEnabled(true) end
     brain.ExternalQte = nil
+    local item = brain.ExternalItem
+    if item and not item.Destroyed and item.Generation == brain.ExternalItemGeneration and not item.Enabled then item:SetEnabled(true) end
+    brain.ExternalItem = nil
 end
 
 
 local function defenseStep(now)
     local full = env.__ALLEN_MATCH_combat
     if full and full.Enabled then status("Full Auto Combat controls defense"); return end
+    local item = env.__ALLEN_MATCH_dodgeitem
+    if item and item.Enabled and (item.ItemReady or item.ItemWindowActive) then status("Dodge item handles this threat"); return end
     if now >= nextScan then nextScan = now + .5; scanThreats() end
     local character = LP.Character
     local humanoid, root = live(character)
@@ -4077,6 +4282,7 @@ local function stop()
     table.clear(qteCallbacks)
     if qteLibrary and qteLibrary.new == wrappedQteNew then qteLibrary.new = originalQteNew end
     if MODE == "combat" then stopAdvancedCombat() end
+    if MODE == "dodgeitem" then stopItemDodge() end
     if ui then ui:Destroy(); ui, label, folder = nil, nil, nil end
     local h, r = live(S.Moving)
     if h and S.Moving == LP.Character then h:MoveTo(r.Position) end
@@ -4091,6 +4297,12 @@ function S:SetEnabled(enabled)
         self.Status = "Managed by Full Auto Combat"
         return
     end
+    local itemOwner = MODE == "dodgeitem" and env.__ALLEN_MATCH_combat
+    if itemOwner and itemOwner.Enabled and not itemOwner.Destroyed then
+        itemOwner.ItemDodgeEnabled = enabled == true
+        self.Status = "Managed by Full Auto Combat"
+        return
+    end
     self.Enabled = false
     stop()
     if not enabled or self.Destroyed then self.Status = "Off"; return end
@@ -4099,12 +4311,16 @@ function S:SetEnabled(enabled)
     end
     if MODE == "dodge" then dashHandler = nativeDash(); assert(dashHandler, "Native dash not ready") end
     if MODE == "qte" then prepareQte() end
+    if MODE == "dodgeitem" then
+        assert(type(getgc) == "function", "Dodge item inspection needs getgc support")
+        prepareItemDodge()
+    end
     if MODE == "combat" then
         local ok, err = pcall(function() prepareAdvancedCombat(); prepareQte() end)
         if not ok then stop(); error(err, 0) end
     end
     self.Enabled = true
-    if MODE == "dodge" or MODE == "combat" then
+    if MODE == "dodge" or MODE == "combat" or MODE == "dodgeitem" then
         local event = RS.Remotes.Gameplay.Combat:FindFirstChild("CreateHitbox")
         if event and event:IsA("RemoteEvent") then
             connections[#connections + 1] = event.OnClientEvent:Connect(reportedHitbox)
@@ -4116,13 +4332,14 @@ function S:SetEnabled(enabled)
     nextScan, nextSlow = 0, 0
     connections[#connections + 1] = Run.Heartbeat:Connect(function(dt)
         elapsed += dt
-        if MODE ~= "combat" and MODE ~= "dodge" and elapsed < (MODE == "qte" and 1/30 or .1) then return end
+        if MODE ~= "combat" and MODE ~= "dodge" and MODE ~= "dodgeitem" and elapsed < (MODE == "qte" and 1/30 or .1) then return end
         elapsed = 0
         local now = os.clock()
         local started = os.clock()
         local ok, err = pcall(function()
             if MODE == "combat" then combatStep(now); if self.QTEEnabled then qteStep() end
             elseif MODE == "dodge" then defenseStep(now)
+            elseif MODE == "dodgeitem" then itemDodgeStep(now)
             elseif MODE == "qte" then qteStep(now)
             elseif now >= nextSlow then
                 nextSlow = now + (MODE == "rewards" and 15 or 1)
@@ -4139,6 +4356,8 @@ end
 function S:GetSnapshot()
     local full = MODE == "qte" and env.__ALLEN_MATCH_combat
     if full and full.Enabled and not full.Destroyed then return {Enabled = full.QTEEnabled, Status = "Managed by Full Auto Combat"} end
+    local itemOwner = MODE == "dodgeitem" and env.__ALLEN_MATCH_combat
+    if itemOwner and itemOwner.Enabled and not itemOwner.Destroyed then return {Enabled = itemOwner.ItemDodgeEnabled, Status = "Managed by Full Auto Combat"} end
     return {Enabled = self.Enabled, Status = self.Status, Actions = self.Actions,
         Decision = self.Decision, Target = self.TargetName, ObservedAttacks = self.ObservedAttacks,
         AttackRequests = self.AttackRequests, DashRequests = self.DashRequests, JumpRequests = self.JumpRequests,
@@ -4146,6 +4365,8 @@ function S:GetSnapshot()
         DashPunchRequests = self.DashPunchRequests, ConfirmedDashPunches = self.ConfirmedDashPunches,
         MotorFrames = self.MotorFrames, MovedStuds = self.MovedStuds, ConfirmedJumps = self.ConfirmedJumps,
         Navigation = self.Navigation, QTEPresses = self.Actions,
+        ItemRequests = self.ItemRequests, ItemAccepted = self.ItemAccepted, ItemDodged = self.ItemDodged,
+        ItemMissed = self.ItemMissed, ItemStatus = self.ItemStatus,
         DamageObserved = self.DamageObserved, MaxStepMs = self.MaxStepMs}
 end
 function S:Destroy()
@@ -7042,10 +7263,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r18",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r19",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r18 · Sky Fighters map navigation and QTE · all features OFF."
+local note="Build r19 · Sky Fighters native dodge item · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7074,6 +7295,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Use Dodge Item",Subtitle="Owned Flowstate Dodge · native hitbox threats",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights and health",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
     {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitbox geometry · Fists / pole",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
     {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive combat · map navigation · auto QTE · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
@@ -7145,9 +7367,9 @@ for _,feature in ipairs(features)do
     end
 end
 local function snapshot(feature)
-    if feature.Id=="match_qte" then
+    if feature.Id=="match_qte" or feature.Id=="match_dodgeitem" then
         local full=env.__ALLEN_MATCH_combat
-        if full and full.Enabled and not full.Destroyed then return {Enabled=full.QTEEnabled,Status="Managed by Full Auto Combat"}end
+        if full and full.Enabled and not full.Destroyed then return {Enabled=feature.Id=="match_qte" and full.QTEEnabled or feature.Id=="match_dodgeitem" and full.ItemDodgeEnabled,Status="Managed by Full Auto Combat"}end
     end
     if feature.MobileUnsupported and UIS.TouchEnabled then return {Enabled=false,Status="Disabled on mobile after crash report"}end
     if feature.PCOnly and not UIS.KeyboardEnabled then return {Enabled=false,Status="PC only"} end
@@ -7232,7 +7454,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R18",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R19",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
