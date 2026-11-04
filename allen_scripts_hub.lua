@@ -3129,8 +3129,13 @@ local UIS = game:GetService("UserInputService")
 local LP = Players.LocalPlayer
 local env = getgenv()
 local gameplay = RS.Modules.Gameplay
-local States = require(gameplay.CharacterStateController)
 local MODE = MATCH_MODE_LITERAL
+local States
+if MODE == "combat" or MODE == "dodge" or MODE == "dodgeitem" then
+    local controller = gameplay:FindFirstChild("CharacterStateController")
+    assert(controller, "Join a Sky Fighters combat round to use this feature")
+    States = require(controller)
+end
 local Event, Data
 if MODE == "bloodmoon" or MODE == "candy" then
     local config = RS.Config:FindFirstChild("HalloweenEvent")
@@ -3172,7 +3177,8 @@ local function threatOverlaps(threat, attackerRoot, character)
     return size and overlapsCharacter(attackerRoot.CFrame * hitboxOffset, size, character) or false
 end
 for _, name in ipairs({"Fists", "Pole"}) do
-    local power = gameplay.Powers:FindFirstChild(name)
+    local powers = gameplay:FindFirstChild("Powers")
+    local power = powers and powers:FindFirstChild(name)
     local moves = power and power:FindFirstChild("Moves")
     local move = moves and moves:FindFirstChild(name)
     local assets = move and move:FindFirstChild("Assets")
@@ -3776,7 +3782,7 @@ local function requestCombatDash(humanoid, root, direction, target, record, now)
 end
 
 local itemState = {NextAttempt = 0, Dispatcher = nil, Character = nil, NextInspect = 0, ActiveUntil = 0}
-local itemDefinition = require(gameplay.Powers.Flowstate.Definition).Dodge
+local itemDefinition
 S.ItemRequests, S.ItemAccepted, S.ItemDodged, S.ItemMissed = 0, 0, 0, 0
 
 local function ownedDodgeItem(character)
@@ -3848,6 +3854,11 @@ local function itemNotify(command)
 end
 
 prepareItemDodge = function()
+    local powers = gameplay:FindFirstChild("Powers")
+    local flow = powers and powers:FindFirstChild("Flowstate")
+    local definition = flow and flow:FindFirstChild("Definition")
+    assert(definition, "Join a Sky Fighters combat round to use the Dodge item")
+    itemDefinition = require(definition).Dodge
     local character = LP.Character
     if character and ownedDodgeItem(character) then findItemDispatcher(character, os.clock()) end
 end
