@@ -2934,8 +2934,6 @@ local function step(now)
         state.Status = "Waiting for survivor team"
         return
     end
-    collectAmmo(root, now)
-    if ammoTrip then state.Status = "Collecting ammo / returning"; return end
     local tool = character:FindFirstChildOfClass("Tool")
     if not tool or not combat.IsActiveEventTool(tool) or not character:GetAttribute("HoldingWeapon") then
         state.Status = "Equip an event gun"
@@ -2943,6 +2941,12 @@ local function step(now)
     end
     local info = tool:FindFirstChild("InfoClient")
     local bullets = info and info:FindFirstChild("Bullets")
+    local remaining = tool:GetAttribute(attr.Ammo)
+    if type(remaining) == "number" and remaining <= 0 then
+        collectAmmo(root, now)
+        state.Status = ammoTrip and "Out of ammo · collecting / returning" or "Out of ammo · waiting for a station"
+        return
+    end
     if bullets and bullets.Value <= 0 then
         if now >= nextReload then
             nextReload = now + 1
@@ -2973,7 +2977,7 @@ local function step(now)
             end
         end
     end
-    state.Status = aim and "Firing at zombies" or "Waiting for a clear shot"
+    state.Status = aim and "Firing at zombies" or (ammoTrip and "Collecting ammo / returning" or "Waiting for a clear shot")
     if aim then gun.FiredGun(character, aim, {CustomFireFrom = true}) end
 end
 
@@ -7333,10 +7337,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r24",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r25",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r24 · Sky Fighters fighting-style detection · all features OFF."
+local note="Build r25 · Sky Fighters fighting-style detection · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7524,7 +7528,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R24",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R25",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
