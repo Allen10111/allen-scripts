@@ -3896,7 +3896,11 @@ end
 
 usableDodgeItem = function(character, now)
     if itemState.Pending and now - itemState.Pending.At > 1.2 then itemState.Pending = nil; restoreItemEquip() end
-    if not character or blocked(character) then return end
+    if not character or blocked(character) then
+        S.ItemReady = false
+        S.ItemStatus = "Waiting for native recovery / own attack to finish"
+        return
+    end
     local tool = ownedDodgeItem(character)
     S.ItemWindowActive = now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"})
     if not tool then S.ItemStatus = "Flowstate Dodge item required"; S.ItemReady = false; return end
