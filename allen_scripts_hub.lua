@@ -3119,6 +3119,464 @@ env[key] = state
 return state
 
 ]====],
+Match=[====[
+return function(MATCH_MODE_LITERAL)
+assert(game.GameId == 8366716517, "Open Sky Fighters")
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local Run = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local LP = Players.LocalPlayer
+local env = getgenv()
+local gameplay = RS.Modules.Gameplay
+local States = require(gameplay.CharacterStateController)
+local Event = require(RS.Config.HalloweenEvent)
+local Data = require(RS.Modules.Data.DataManager).client
+local MODE = MATCH_MODE_LITERAL
+local key = "__ALLEN_MATCH_" .. MODE
+if env[key] then env[key]:Destroy() end
+local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0}
+local connections, markers, watches, threats = {}, {}, {}, {}
+local ui, label, folder, dashHandler
+local nextScan, nextAction, nextSlow = 0, 0, 0
+local rewardBusy = false
+local qteCallbacks = {}
+local attemptedQtes = setmetatable({}, {__mode = "k"})
+local attackIds = {}
+for _, name in ipairs({"Fists", "Pole"}) do
+    local power = gameplay.Powers:FindFirstChild(name)
+    local moves = power and power:FindFirstChild("Moves")
+    local move = moves and moves:FindFirstChild(name)
+    local assets = move and move:FindFirstChild("Assets")
+    local animations = assets and assets:FindFirstChild("Animations")
+    if animations then
+        for _, animation in ipairs(animations:GetChildren()) do
+            if animation:IsA("Animation") and animation.Name:match("^M%d+$") then
+                attackIds[animation.AnimationId:match("%d+")] = name
+            end
+        end
+    end
+end
+
+local function live(character)
+    local h = character and character:FindFirstChildOfClass("Humanoid")
+    local r = character and character:FindFirstChild("HumanoidRootPart")
+    if character and character.Parent and h and h.Health > 0 and r then return h, r end
+end
+
+local function blocked(character)
+    return UIS:GetFocusedTextBox() ~= nil or character:GetAttribute("AbilityActivationLocked") == true
+        or States.HasAny(character, {"CombatDisabled", "Busy", "Ragdolled", "Stunned", "Immobilized", "MovementInputDisabled"})
+end
+
+local function overlay()
+    ui = Instance.new("ScreenGui")
+    ui.Name = "AllenMatch_" .. MODE
+    ui.ResetOnSpawn = false
+    ui.Parent = LP.PlayerGui
+    folder = Instance.new("Folder")
+    folder.Parent = ui
+    if MODE ~= "esp" then
+        label = Instance.new("TextLabel")
+        label.AnchorPoint = Vector2.new(0.5, 0)
+        label.Position = UDim2.fromScale(0.5, ({combat=.10, dodge=.15, qte=.20, rewards=.25, cooldown=.30, bloodmoon=.35, candy=.40})[MODE] or .1)
+        label.Size = UDim2.new(.8, 0, 0, 25)
+        label.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+        label.BackgroundTransparency = .25
+        label.TextColor3 = Color3.new(1, 1, 1)
+        label.TextSize = 13
+        label.Font = Enum.Font.Gotham
+        label.Text = "Starting " .. MODE
+        label.Parent = ui
+    end
+end
+
+local function status(text)
+    S.Status = text
+    if label then label.Text = text end
+end
+
+local function nativeDash()
+    local buttons = LP.PlayerGui:FindFirstChild("MobileButtons")
+    buttons = buttons and buttons:FindFirstChild("Main")
+    local button = buttons and buttons:FindFirstChild("Dash")
+    if not button then return end
+    local found
+    for _, c in ipairs(getconnections(button.MouseButton1Click)) do
+        local fn = c.Function
+        if type(fn) == "function" then
+            local source = getfenv(fn).script
+            if source and source.Name == "DashSetup" and debug.info(fn, "n") == "dash" then
+                assert(not found, "Multiple native dash handlers")
+                found = fn
+            end
+        end
+    end
+    return found
+end
+
+local function scanThreats()
+    local present = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP then
+            local character = player.Character
+            local h = live(character)
+            local animator = h and h:FindFirstChildOfClass("Animator")
+            if animator then
+                present[player] = animator
+                if not watches[player] or watches[player].Animator ~= animator then
+                    if watches[player] then watches[player].Connection:Disconnect() end
+                    watches[player] = {Animator = animator, Connection = animator.AnimationPlayed:Connect(function(track)
+                        local id = track.Animation and track.Animation.AnimationId:match("%d+")
+                        if attackIds[id] then
+                            threats[player] = {Track = track, Character = character, Used = false, At = os.clock()}
+                        end
+                    end)}
+                end
+            end
+        end
+    end
+    for player, w in pairs(watches) do
+        if present[player] ~= w.Animator then
+            w.Connection:Disconnect()
+            watches[player], threats[player] = nil, nil
+        end
+    end
+end
+
+local function activeThreat(root)
+    for player, threat in pairs(threats) do
+        local _, other = live(threat.Character)
+        if player.Character ~= threat.Character or not other or not threat.Track.IsPlaying or os.clock() - threat.At > 1 then
+            threats[player] = nil
+        elseif not threat.Used then
+            local delta = root.Position - other.Position
+            local flat = Vector3.new(delta.X, 0, delta.Z)
+            if flat.Magnitude > .1 and flat.Magnitude < 7 and math.abs(delta.Y) < 4
+                and other.CFrame.LookVector:Dot(flat.Unit) > .65 and threat.Track.TimePosition >= .04
+                and threat.Track.TimePosition < .4 then
+                return threat, other
+            end
+        end
+    end
+end
+
+local function espStep()
+    local count = 0
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP then
+            local h, r = live(player.Character)
+            local marker = markers[player]
+            if marker and (not r or marker.Character ~= player.Character) then
+                marker.Highlight:Destroy()
+                marker.Gui:Destroy()
+                markers[player] = nil
+                marker = nil
+            end
+            if r then
+                if not marker then
+                    local highlight = Instance.new("Highlight")
+                    highlight.Adornee = player.Character
+                    highlight.FillColor = Color3.fromRGB(240, 80, 80)
+                    highlight.FillTransparency = .6
+                    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    highlight.Parent = folder
+                    local gui = Instance.new("BillboardGui")
+                    gui.Adornee = r
+                    gui.AlwaysOnTop = true
+                    gui.Size = UDim2.fromOffset(180, 30)
+                    gui.StudsOffset = Vector3.new(0, 3.5, 0)
+                    gui.Parent = folder
+                    local text = Instance.new("TextLabel")
+                    text.Size = UDim2.fromScale(1, 1)
+                    text.BackgroundTransparency = 1
+                    text.TextColor3 = Color3.new(1, 1, 1)
+                    text.TextStrokeTransparency = .25
+                    text.TextSize = 13
+                    text.Parent = gui
+                    marker = {Character = player.Character, Highlight = highlight, Gui = gui, Text = text}
+                    markers[player] = marker
+                end
+                marker.Text.Text = player.DisplayName .. " · " .. math.ceil(h.Health) .. " HP"
+                count += 1
+            end
+        end
+    end
+    for player, marker in pairs(markers) do
+        if player.Parent ~= Players then marker.Highlight:Destroy(); marker.Gui:Destroy(); markers[player] = nil end
+    end
+    status(count .. " players marked")
+end
+
+local function combatStep(now)
+    local character = LP.Character
+    local humanoid, root = live(character)
+    if not root or blocked(character) then status("Combat waiting for recovery"); return end
+    local target, distance = nil, 45
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP then
+            local _, other = live(player.Character)
+            if other and not States.HasAny(player.Character, {"Invincible", "Ragdolled"}) then
+                local d = (other.Position - root.Position).Magnitude
+                if d < distance then target, distance = other, d end
+            end
+        end
+    end
+    if not target then status("Combat waiting for a nearby opponent"); return end
+    local tool
+    for _, container in ipairs({character, LP.Backpack}) do
+        for _, candidate in ipairs(container:GetChildren()) do
+            if candidate:IsA("Tool") and (candidate.Name == "Fists" or candidate.Name == "Pole") then tool = candidate; break end
+        end
+        if tool then break end
+    end
+    if not tool then status("Combat requires Fists or Pole in inventory"); return end
+    local dodge = env.__ALLEN_MATCH_dodge
+    if dodge and dodge.Enabled and activeThreat(root) then status("Combat yielding to defense"); return end
+    if tool.Parent ~= character then humanoid:EquipTool(tool); return end
+    local direction = target.Position - root.Position
+    local flat = Vector3.new(direction.X, 0, direction.Z)
+    if flat.Magnitude < .1 then return end
+    if distance > 5.5 then
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {character, target.Parent}
+        local step = flat.Unit * math.min(3, flat.Magnitude)
+        if not workspace:Raycast(root.Position, step, params)
+            and workspace:Raycast(root.Position + step, Vector3.new(0, -9, 0), params) then
+            humanoid:MoveTo(target.Position - flat.Unit * 4)
+            S.Moving = character
+        end
+        status("Combat approaching " .. target.Parent.Name)
+    elseif now >= nextAction then
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {character, target.Parent}
+        if workspace:Raycast(root.Position, target.Position - root.Position, params) then
+            status("Combat waiting for a clear strike")
+            return
+        end
+        humanoid:MoveTo(root.Position)
+        root.CFrame = CFrame.lookAt(root.Position, root.Position + flat)
+        local activation = tool:FindFirstChild("HotbarActivated")
+        if activation and activation:IsA("BindableEvent") then
+            activation:Fire()
+            local release = tool:FindFirstChild("HotbarDeactivated")
+            if release and release:IsA("BindableEvent") then release:Fire() end
+            nextAction = now + .5
+            S.Actions += 1
+            status("Combat native attack · " .. S.Actions .. " requests")
+        else status("Waiting for native weapon activation") end
+    end
+end
+
+local function defenseStep(now)
+    if now >= nextScan then nextScan = now + .5; scanThreats() end
+    local character = LP.Character
+    local humanoid, root = live(character)
+    if not root or blocked(character) then status("Defense waiting for recovery"); return end
+    local threat, other = activeThreat(root)
+    if not threat then status("Watching fists / pole swings"); return end
+    status("Incoming melee · " .. other.Parent.Name)
+    if now < nextAction or not dashHandler then return end
+    local offset = root.Position - other.Position
+    local side = Vector3.new(-offset.Z, 0, offset.X)
+    if side.Magnitude < .1 then return end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character, other.Parent}
+    local direction = side.Unit * 5
+    if workspace:Raycast(root.Position, direction, params)
+        or not workspace:Raycast(root.Position + direction, Vector3.new(0, -10, 0), params) then return end
+    threat.Used = true
+    nextAction = now + .5
+    humanoid:MoveTo(root.Position + direction)
+    S.Moving = character
+    local generation = S.Generation
+    task.delay(.06, function()
+        if not S.Enabled or S.Generation ~= generation or LP.Character ~= character or blocked(character) then return end
+        -- Used records remain eligible for the final direction check below.
+        local delta = root.Position - other.Position
+        if other.Parent and threat.Track.IsPlaying and delta.Magnitude < 8
+            and delta.Magnitude > .1 and other.CFrame.LookVector:Dot(delta.Unit) > .65 then
+            local ok, err = pcall(dashHandler)
+            if ok then S.Actions += 1 else status("Dash error · " .. tostring(err)) end
+        end
+    end)
+end
+
+local qteLibrary, originalQteNew, wrappedQteNew, nativeQtePress
+local function prepareQte()
+    qteLibrary = require(gameplay.QTEManager.QuickTimeEvents)
+    originalQteNew = qteLibrary.new
+    for _, value in pairs(debug.getupvalues(originalQteNew)) do
+        if type(value) == "function" and debug.info(value, "n") == "Pressed" then
+            nativeQtePress = value
+            break
+        end
+    end
+    assert(nativeQtePress, "Native QTE input function changed")
+    wrappedQteNew = function(...)
+        local args = table.pack(...)
+        local object = originalQteNew(...)
+        if S.Enabled then
+            local duration = tonumber(args[3])
+            if not duration or duration <= .1 then duration = qteLibrary.DefaultDuration end
+            qteCallbacks[object] = {
+                Deadline = tick() + duration,
+                Window = (tonumber(args[7]) or .28) * 2
+            }
+        end
+        return object
+    end
+    qteLibrary.new = wrappedQteNew
+end
+
+local function qteStep()
+    local count = 0
+    for object, metadata in pairs(qteCallbacks) do
+        local obj = object._obj
+        if object.Pressed or object._cancelled or not obj or not obj.Parent or tick() >= metadata.Deadline then
+            qteCallbacks[object] = nil
+        else
+            count += 1
+            local circle, reference = obj:FindFirstChild("Circle"), obj:FindFirstChild("Reference")
+            if circle and reference and circle.Size.X.Scale <= reference.Size.X.Scale * 1.025 then
+                if not attemptedQtes[object] then
+                    attemptedQtes[object] = true
+                    nativeQtePress(object, metadata.Window, metadata.Deadline, object.Mode)
+                    S.Actions += 1
+                end
+            end
+        end
+    end
+    status("QTE watching " .. count .. " prompts · " .. S.Actions .. " native presses")
+end
+
+local function rewardStep()
+    if rewardBusy then return end
+    rewardBusy = true
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local rewards = RS.Remotes.Commerce.Rewards
+            local data = rewards.GetPlaytimeRewards:InvokeServer()
+            if not S.Enabled or type(data) ~= "table" then return end
+            local config = require(RS.Config.Rewards.PlaytimeRewardsConfig)
+            for index, reward in ipairs(config.Rewards) do
+                if not S.Enabled then break end
+                if not ((data.Claimed or {})[index] or (data.Claimed or {})[tostring(index)])
+                    and (tonumber(data.PlaySeconds) or 0) >= (tonumber(reward.RequiredSeconds) or math.huge) then
+                    local result = rewards.ClaimPlaytimeReward:InvokeServer(index)
+                    if type(result) == "table" and result.Success then S.Actions += 1 end
+                    if type(result) == "table" and result.State then data = result.State end
+                end
+            end
+            if S.Enabled then status("Eligible rewards claimed · " .. S.Actions) end
+        end)
+        rewardBusy = false
+        if not ok and S.Enabled then status("Reward check failed · " .. tostring(err)) end
+    end)
+end
+
+local function trackerStep()
+    if MODE == "bloodmoon" then
+        local window = Event.BloodMoonWindow(os.time())
+        if window then status("Blood Moon active · " .. math.max(0, window.End - os.time()) .. "s left")
+        else
+            local nextStart = math.huge
+            for _, w in ipairs(Event.BloodMoon.Windows) do if w.Start > os.time() then nextStart = math.min(nextStart, w.Start) end end
+            status(nextStart < math.huge and ("Next Blood Moon in " .. math.floor((nextStart - os.time()) / 60) .. " min") or "No upcoming Blood Moon window")
+        end
+    elseif MODE == "candy" then
+        local amount = tonumber(Data:GetValue({"EventsData", Event.EventKey, "Candy"})) or 0
+        if S.StartCandy == nil then S.StartCandy = amount end
+        status("Candy · " .. amount .. " · change " .. (amount - S.StartCandy) .. " this session")
+    elseif MODE == "cooldown" then
+        if not dashHandler then dashHandler = nativeDash() end
+        if not dashHandler then status("Dash cooldown interface unavailable"); return end
+        local values = debug.getupvalues(dashHandler)
+        -- Verified native dash closure positions 5 and 6 are cooldown-active and unlocked.
+        if type(values[5]) ~= "boolean" or type(values[6]) ~= "boolean" then
+            status("Dash state layout changed"); return
+        end
+        local text = values[5] and "cooldown active" or (values[6] and "ready" or "locked")
+        local character = LP.Character
+        local timers = {}
+        if character then
+            local now = workspace:GetServerTimeNow()
+            for name, value in pairs(character:GetAttributes()) do
+                if name:match("CooldownUntil$") and type(value) == "number" and value > now and value - now < 600 then
+                    timers[#timers + 1] = name:gsub("CooldownUntil$", "") .. " " .. math.ceil(value - now) .. "s"
+                end
+            end
+        end
+        status("Dash · " .. text .. (#timers > 0 and (" · " .. table.concat(timers, " · ")) or ""))
+    end
+end
+
+local function stop()
+    for _, c in ipairs(connections) do c:Disconnect() end
+    table.clear(connections)
+    for _, w in pairs(watches) do w.Connection:Disconnect() end
+    table.clear(watches)
+    table.clear(threats)
+    table.clear(markers)
+    table.clear(qteCallbacks)
+    if qteLibrary and qteLibrary.new == wrappedQteNew then qteLibrary.new = originalQteNew end
+    if ui then ui:Destroy(); ui, label, folder = nil, nil, nil end
+    local h, r = live(S.Moving)
+    if h and S.Moving == LP.Character then h:MoveTo(r.Position) end
+    S.Moving = nil
+end
+
+function S:SetEnabled(enabled)
+    self.Generation += 1
+    self.Enabled = false
+    stop()
+    if not enabled or self.Destroyed then self.Status = "Off"; return end
+    if MODE == "dodge" or MODE == "cooldown" then
+        assert(type(getconnections) == "function", "Executor needs native callback inspection")
+    end
+    if MODE == "dodge" then dashHandler = nativeDash(); assert(dashHandler, "Native dash not ready") end
+    if MODE == "qte" then prepareQte() end
+    self.Enabled = true
+    overlay()
+    status("Starting " .. MODE)
+    local elapsed = 0
+    nextScan, nextSlow = 0, 0
+    connections[#connections + 1] = Run.Heartbeat:Connect(function(dt)
+        elapsed += dt
+        if elapsed < (MODE == "qte" and 1/30 or .1) then return end
+        elapsed = 0
+        local now = os.clock()
+        local ok, err = pcall(function()
+            if MODE == "combat" then combatStep(now)
+            elseif MODE == "dodge" then defenseStep(now)
+            elseif MODE == "qte" then qteStep(now)
+            elseif now >= nextSlow then
+                nextSlow = now + (MODE == "rewards" and 15 or 1)
+                if MODE == "esp" then espStep()
+                elseif MODE == "rewards" then rewardStep()
+                else trackerStep() end
+            end
+        end)
+        if not ok then self:SetEnabled(false); self.Status = "Stopped · " .. tostring(err); warn("[Match " .. MODE .. "] " .. tostring(err)) end
+    end)
+end
+
+function S:GetSnapshot()
+    return {Enabled = self.Enabled, Status = self.Status, Actions = self.Actions}
+end
+function S:Destroy()
+    self:SetEnabled(false)
+    self.Destroyed = true
+    if env[key] == self then env[key] = nil end
+end
+env[key] = S
+return S
+
+end
+]====],
 PA=[====[
 assert(game.GameId==4557322431,"Open Project: Afternight")
 local env=getgenv()
@@ -6003,10 +6461,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-03-r14",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r15",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
-local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or "Other experience"
-local note="Build r13 · improved boxing defense and footwork · all features OFF."
+local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
+local note="Build r15 · Sky Fighters features · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -6035,6 +6493,14 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights and health",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
+    {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Fists / pole swings · native dash",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
+    {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Auto Combat",Subtitle="Fists / pole · approach and native attacks",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
+    {Id="match_qte",Section="Sky Fighters",Category="Minigames",Name="Auto QTE",Subtitle="Native shrinking-circle prompt timing",Game=8366716517,Key="__ALLEN_MATCH_qte",Source="Match",Mode="qte"},
+    {Id="match_rewards",Section="Sky Fighters",Category="Utility",Name="Auto Claim Playtime Rewards",Subtitle="Claims eligible playtime rewards",Game=8366716517,Key="__ALLEN_MATCH_rewards",Source="Match",Mode="rewards"},
+    {Id="match_cooldown",Section="Sky Fighters",Category="Alerts",Name="Cooldown Display",Subtitle="Native dash readiness and available power timers",Game=8366716517,Key="__ALLEN_MATCH_cooldown",Source="Match",Mode="cooldown"},
+    {Id="match_bloodmoon",Section="Sky Fighters",Category="Alerts",Name="Blood Moon Tracker",Subtitle="Active event and next configured window",Game=8366716517,Key="__ALLEN_MATCH_bloodmoon",Source="Match",Mode="bloodmoon"},
+    {Id="match_candy",Section="Sky Fighters",Category="Alerts",Name="Candy Tracker",Subtitle="Native balance and session change",Game=8366716517,Key="__ALLEN_MATCH_candy",Source="Match",Mode="candy"},
     {Id="candyesp",Section="Ink Game",Category="Alerts",Name="Candy ESP",Subtitle="Orange pickup highlights and distance labels",Badge="Halloween",Game=INK,Key="__ALLEN_CANDY_ESP",Source="CandyESP"},
     {Id="halloweenshoot",Section="Ink Game",Category="Combat",Name="Halloween Auto Shoot + Ammo",Subtitle="Zombie NPCs and nearby ammo stations",Badge="Halloween",Game=INK,Key="__ALLEN_HALLOWEEN_SHOOT",Source="HalloweenShoot"},
     {Id="pa",Section="Project: Afternight",Category="Rhythm",Name="Auto Play",Subtitle="Native botplay · taps and holds · game scoring rules",Badge="New",Game=4557322431,Key="__ALLEN_PA_AUTOPLAY",Source="PA"},
@@ -6181,7 +6647,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R13",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R15",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
@@ -6264,7 +6730,7 @@ buildNavigation=function()
     if selectedGame=="Ink Game" then
         tabs[#tabs+1]={"Red Light","◉"};tabs[#tabs+1]={"Dalgona","◇"};tabs[#tabs+1]={"Glass Bridge","◇"};tabs[#tabs+1]={"Hide & Seek","◇"};tabs[#tabs+1]={"Tug of War","◇"};tabs[#tabs+1]={"Jump Rope","◇"};tabs[#tabs+1]={"Auto QTE","◇"};tabs[#tabs+1]={"Movement","↗"}
     else
-        for _,name in ipairs({"Aim","Movement","Rhythm","Alerts","Combat","Minigames"})do
+        for _,name in ipairs({"Aim","Movement","Rhythm","Alerts","Combat","Minigames","Utility"})do
             local found=false
             for _,f in ipairs(features)do if f.Category==name and (selectedGame=="All" or f.Section==selectedGame)then found=true;break end end
             if found then tabs[#tabs+1]={name,"◇"} end
