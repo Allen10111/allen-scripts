@@ -2983,6 +2983,117 @@ env[key] = state
 return state
 
 ]====],
+CandyESP=[====[
+assert(game.GameId == 7008097940, "Open Ink Game")
+local env = getgenv()
+local key = "__ALLEN_CANDY_ESP"
+if env[key] then env[key]:Destroy() end
+local state = {HubOnly = true, Enabled = false, Status = "Off"}
+local markers = {}
+local connection, addedConnection
+local folder
+local function pickup(object)
+    if not (object:IsA("Model") or object:IsA("BasePart")) then return false end
+    if object:FindFirstAncestor("Live") then return false end
+    local name = object.Name:lower()
+    return name == "candy" or name == "candypile" or name == "candypickup"
+        or name == "candydrop" or object:GetAttribute("CandyPickup") == true
+end
+local function clear()
+    if connection then connection:Disconnect(); connection = nil end
+    if addedConnection then addedConnection:Disconnect(); addedConnection = nil end
+    if folder then folder:Destroy(); folder = nil end
+    table.clear(markers)
+end
+local function refresh()
+    local count = 0
+    local root = game:GetService("Players").LocalPlayer.Character
+    root = root and root:FindFirstChild("HumanoidRootPart")
+    for object, marker in pairs(markers) do
+        if not object:IsDescendantOf(workspace) or not marker.Part:IsDescendantOf(object) and marker.Part ~= object then
+            marker.Highlight:Destroy()
+            marker.Gui:Destroy()
+            markers[object] = nil
+        else
+            count += 1
+            local position = marker.Part.Position
+            local distance = root and math.floor((position - root.Position).Magnitude)
+            marker.Text.Text = distance and ("Candy · " .. distance .. " studs") or "Candy"
+        end
+    end
+    state.Status = count .. " candy pickups marked"
+end
+local function add(object)
+    if not state.Enabled or markers[object] or not pickup(object) then return end
+    local ancestor = object.Parent
+    while ancestor and ancestor ~= workspace do
+        if pickup(ancestor) then return end
+        ancestor = ancestor.Parent
+    end
+    local part = object:IsA("BasePart") and object or object:FindFirstChildWhichIsA("BasePart", true)
+    if not part then return end
+    local highlight = Instance.new("Highlight")
+    highlight.Adornee = object
+    highlight.FillColor = Color3.fromRGB(255, 145, 30)
+    highlight.OutlineColor = Color3.fromRGB(255, 240, 140)
+    highlight.FillTransparency = 0.35
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = folder
+    local gui = Instance.new("BillboardGui")
+    gui.Adornee = part
+    gui.AlwaysOnTop = true
+    gui.Size = UDim2.fromOffset(160, 30)
+    gui.StudsOffset = Vector3.new(0, 2, 0)
+    gui.Parent = folder
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.fromScale(1, 1)
+    text.BackgroundTransparency = 1
+    text.TextColor3 = Color3.fromRGB(255, 200, 90)
+    text.TextStrokeTransparency = 0.2
+    text.Font = Enum.Font.GothamBold
+    text.TextSize = 14
+    text.Text = "Candy"
+    text.Parent = gui
+    markers[object] = {Highlight = highlight, Gui = gui, Text = text, Part = part}
+end
+function state:SetEnabled(enabled)
+    clear()
+    self.Enabled = enabled == true and not self.Destroyed
+    self.Status = self.Enabled and "Looking for candy pickups" or "Off"
+    if not self.Enabled then return end
+    folder = Instance.new("Folder")
+    folder.Name = "AllenCandyESP"
+    folder.Parent = game:GetService("Players").LocalPlayer.PlayerGui
+    for _, object in ipairs(workspace:GetDescendants()) do add(object) end
+    addedConnection = workspace.DescendantAdded:Connect(function(object)
+        task.defer(function()
+            if self.Enabled and object:IsDescendantOf(workspace) then
+                add(object)
+                if object.Parent then add(object.Parent) end
+            end
+        end)
+    end)
+    local elapsed = 0
+    connection = game:GetService("RunService").Heartbeat:Connect(function(dt)
+        elapsed += dt
+        if elapsed < 1 then return end
+        elapsed = 0
+        refresh()
+    end)
+    refresh()
+end
+function state:GetSnapshot()
+    return {Enabled = self.Enabled, Status = self.Status}
+end
+function state:Destroy()
+    self:SetEnabled(false)
+    self.Destroyed = true
+    if env[key] == self then env[key] = nil end
+end
+env[key] = state
+return state
+
+]====],
 PA=[====[
 assert(game.GameId==4557322431,"Open Project: Afternight")
 local env=getgenv()
@@ -5899,6 +6010,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="candyesp",Section="Ink Game",Category="Alerts",Name="Candy ESP",Subtitle="Orange pickup highlights and distance labels",Badge="Halloween",Game=INK,Key="__ALLEN_CANDY_ESP",Source="CandyESP"},
     {Id="halloweenshoot",Section="Ink Game",Category="Combat",Name="Halloween Auto Shoot + Ammo",Subtitle="Zombie NPCs and nearby ammo stations",Badge="Halloween",Game=INK,Key="__ALLEN_HALLOWEEN_SHOOT",Source="HalloweenShoot"},
     {Id="pa",Section="Project: Afternight",Category="Rhythm",Name="Auto Play",Subtitle="Native botplay · taps and holds · game scoring rules",Badge="New",Game=4557322431,Key="__ALLEN_PA_AUTOPLAY",Source="PA"},
     {Id="ubgcombat",Section="Untitled Boxing Game",Category="Combat",Name="Auto Combat",Subtitle="Timed counters · stamina-aware defense · safe footwork",Badge="New",Game=UBG,Key="__ALLEN_UBG_COMBAT",Source="UBGCombat"},
