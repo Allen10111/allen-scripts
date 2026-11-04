@@ -2808,20 +2808,34 @@ local state = {HubOnly = true, Enabled = false, Status = "Off"}
 local connection
 local nextStep, nextReload, nextPickup = 0, 0, 0
 
-local function collectAmmo(root, now)
-    if now < nextPickup or type(fireproximityprompt) ~= "function" then return end
+local movingForAmmo = false
+local function collectAmmo(root, now, humanoid)
+    if now < nextPickup then return end
     nextPickup = now + 0.8
+    local nearest, nearestPoint, distance = nil, nil, math.huge
     for _, prompt in ipairs(tags:GetTagged(attr.AmmoPromptTag)) do
         if prompt:IsA("ProximityPrompt") and prompt.Enabled and prompt:IsDescendantOf(workspace) then
             local parent = prompt.Parent
             local point = parent:IsA("Attachment") and parent.WorldPosition
                 or parent:IsA("BasePart") and parent.Position
                 or parent:IsA("Model") and parent:GetPivot().Position
-            if point and (point - root.Position).Magnitude <= math.min(prompt.MaxActivationDistance, 10) then
-                fireproximityprompt(prompt)
-                return
+            if point then
+                local d = (point - root.Position).Magnitude
+                if d < distance then nearest, nearestPoint, distance = prompt, point, d end
             end
         end
+    end
+    if nearest then
+        if distance <= math.min(nearest.MaxActivationDistance, 10) then
+            if movingForAmmo then humanoid:MoveTo(root.Position); movingForAmmo = false end
+            if type(fireproximityprompt) == "function" then fireproximityprompt(nearest) end
+        else
+            movingForAmmo = true
+            humanoid:MoveTo(nearestPoint)
+        end
+    elseif movingForAmmo then
+        humanoid:MoveTo(root.Position)
+        movingForAmmo = false
     end
 end
 
@@ -2830,7 +2844,11 @@ local function step(now)
     local root = character and character:FindFirstChild("HumanoidRootPart")
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not root or not humanoid or humanoid.Health <= 0 then return end
-    collectAmmo(root, now)
+    if character:GetAttribute(attr.Team) == combat.Team.Infected then
+        state.Status = "Waiting for survivor team"
+        return
+    end
+    collectAmmo(root, now, humanoid)
     local tool = character:FindFirstChildOfClass("Tool")
     if not tool or not combat.IsActiveEventTool(tool) or not character:GetAttribute("HoldingWeapon") then
         state.Status = "Equip an event gun"
@@ -2852,9 +2870,9 @@ local function step(now)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {character}
-    local aim, best = nil, 250
+    local aim, best = nil, math.huge
     for _, model in ipairs(live:GetChildren()) do
-        if model:IsA("Model") and model.Name:match("^_InfectedZombie%d+$") then
+        if model:IsA("Model") and model ~= character and (model.Name:match("^_InfectedZombie%d+$") or model:GetAttribute(attr.Team) == combat.Team.Infected) then
             local hp = model:FindFirstChildOfClass("Humanoid")
             local target = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart")
             if hp and hp.Health > 0 and target and target:IsA("BasePart") then
@@ -2876,7 +2894,14 @@ function state:SetEnabled(enabled)
     if connection then connection:Disconnect(); connection = nil end
     self.Enabled = enabled == true and not self.Destroyed
     self.Status = self.Enabled and "Searching for zombies" or "Off"
-    if not self.Enabled then return end
+    if not self.Enabled then
+        local character = player.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if movingForAmmo and humanoid and root then humanoid:MoveTo(root.Position) end
+        movingForAmmo = false
+        return
+    end
     connection = game:GetService("RunService").Heartbeat:Connect(function()
         local now = os.clock()
         if now < nextStep then return end
