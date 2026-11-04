@@ -3659,7 +3659,7 @@ impendingThreat = function(root, now)
             end
         end
     end
-    return selected, selectedRoot
+    return selected, selectedRoot, bestEta
 end
 
 local function routeClear(root, vector, target, length)
@@ -3841,6 +3841,23 @@ local function findItemDispatcher(character, now)
     return found
 end
 
+local function fallbackDash(character, humanoid, root, record, attacker, now)
+    if not record or record.DashAttempted or not attacker or blocked(character) then return false end
+    if not dashHandler then dashHandler = nativeDash() end
+    local away = root.Position - attacker.Position
+    away = Vector3.new(away.X, 0, away.Z)
+    if away.Magnitude < .1 then away = -attacker.CFrame.LookVector end
+    local side = Vector3.new(-away.Z, 0, away.X)
+    for _, direction in ipairs({away, side, -side}) do
+        if requestCombatDash(humanoid, root, direction, attacker.Parent, record, now) then
+            record.DashAttempted = true
+            S.ItemStatus = "Dash fallback requested"
+            return true
+        end
+    end
+    return false
+end
+
 local function restoreItemEquip()
     local lease = itemState.Equip
     itemState.Equip = nil
@@ -3969,11 +3986,26 @@ itemDodgeStep = function(now)
     if full and full.Enabled then status("Full Auto Combat manages the dodge item"); return end
     if now >= nextScan then nextScan = now + .4; scanThreats() end
     local character = LP.Character
-    local _, root = live(character)
+    local humanoid, root = live(character)
     if not root then status("Dodge item waiting for character"); return end
     usableDodgeItem(character, now)
-    local record = impendingThreat(root, now)
-    if record then tryItemDodge(character, root, record, now) end
+    local record, attacker, eta = impendingThreat(root, now)
+    if record then
+        local active = now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"})
+        if not active then
+            local pending = itemState.Pending
+            -- A confirmed item window owns defense; an unconfirmed request has a short deadline.
+            local deadline = math.max(.04, (S.PingMs or 100) / 2000)
+            local tooLate = eta and eta <= deadline
+            if pending then
+                if tooLate or now - pending.At >= deadline then
+                    fallbackDash(character, humanoid, root, record, attacker, now)
+                end
+            elseif tooLate or not tryItemDodge(character, root, record, now) then
+                fallbackDash(character, humanoid, root, record, attacker, now)
+            end
+        end
+    end
     status(S.ItemStatus or "Watching native hitbox threats")
 end
 
@@ -4164,7 +4196,7 @@ local function defenseStep(now)
     local full = env.__ALLEN_MATCH_combat
     if full and full.Enabled then status("Full Auto Combat controls defense"); return end
     local item = env.__ALLEN_MATCH_dodgeitem
-    if item and item.Enabled and (item.ItemReady or item.ItemWindowActive) then status("Dodge item handles this threat"); return end
+    if item and item.Enabled then status("Auto Dodge + Dash controls defense"); return end
     if now >= nextScan then nextScan = now + .5; scanThreats() end
     local character = LP.Character
     local humanoid, root = live(character)
@@ -7301,10 +7333,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r23",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r24",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r23 · Sky Fighters fighting-style detection · all features OFF."
+local note="Build r24 · Sky Fighters fighting-style detection · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7333,7 +7365,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Use Dodge Item",Subtitle="Flowstate Dodge · all current fighting styles",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
+    {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Dodge + Dash",Subtitle="Flowstate Dodge first · safe dash fallback",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
     {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitboxes · all current fighting styles",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
     {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive combat · map navigation · auto QTE · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
@@ -7492,7 +7524,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R23",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R24",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
