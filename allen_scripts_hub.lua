@@ -2811,14 +2811,42 @@ local nextStep, nextReload, nextPickup = 0, 0, 0
 local ammoTrip
 local attemptedPrompts = setmetatable({}, {__mode = "k"})
 
-local function returnFromAmmo(trip)
+local function tripActive(trip)
+    local humanoid = trip.Character:FindFirstChildOfClass("Humanoid")
+    return ammoTrip == trip and state.Enabled and player.Character == trip.Character
+        and trip.Root.Parent == trip.Character and humanoid and humanoid.Health > 0
+        and trip.Character:GetAttribute(attr.Team) ~= combat.Team.Infected
+end
+
+local function stopAmmoTrip(trip)
     if ammoTrip ~= trip then return end
     ammoTrip = nil
-    if player.Character == trip.Character and trip.Root.Parent == trip.Character then
-        trip.Root.CFrame = trip.Origin
-        trip.Root.AssemblyLinearVelocity = Vector3.zero
-        trip.Root.AssemblyAngularVelocity = Vector3.zero
+    local humanoid = trip.Character:FindFirstChildOfClass("Humanoid")
+    if player.Character == trip.Character and humanoid and trip.Root.Parent then
+        humanoid:MoveTo(trip.Root.Position)
     end
+end
+
+local function walkTo(trip, destination, radius)
+    if not tripActive(trip) then return false end
+    local humanoid = trip.Character:FindFirstChildOfClass("Humanoid")
+    local path = game:GetService("PathfindingService"):CreatePath()
+    path:ComputeAsync(trip.Root.Position, destination)
+    if not tripActive(trip) or path.Status ~= Enum.PathStatus.Success then return false end
+    local deadline = os.clock() + 35
+    for _, waypoint in ipairs(path:GetWaypoints()) do
+        if not tripActive(trip) or os.clock() > deadline then return false end
+        if (trip.Root.Position - destination).Magnitude <= radius then return true end
+        if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
+        humanoid:MoveTo(waypoint.Position)
+        local expires = os.clock() + 4
+        repeat
+            task.wait(0.1)
+            if not tripActive(trip) then return false end
+        until (trip.Root.Position - waypoint.Position).Magnitude < 3 or os.clock() >= expires
+        if (trip.Root.Position - waypoint.Position).Magnitude >= 3 then return false end
+    end
+    return (trip.Root.Position - destination).Magnitude <= radius
 end
 
 local function collectAmmo(root, now)
@@ -2840,20 +2868,23 @@ local function collectAmmo(root, now)
     end
     if not nearest then return end
     attemptedPrompts[nearest] = now
-    local trip = {Root = root, Character = player.Character, Origin = root.CFrame}
+    local trip = {Root = root, Character = player.Character, Origin = root.Position}
     ammoTrip = trip
     task.spawn(function()
         local ok, err = pcall(function()
-            root.CFrame = CFrame.new(nearestPoint + Vector3.new(0, 2, 0)) * trip.Origin.Rotation
-            root.AssemblyLinearVelocity = Vector3.zero
-            task.wait(0.15)
-            if ammoTrip ~= trip or not state.Enabled or player.Character ~= trip.Character then return end
-            if nearest.Parent and nearest.Enabled then
+            local range = math.min(nearest.MaxActivationDistance, 10)
+            local arrived = walkTo(trip, nearestPoint, math.max(2, range - 1))
+            if arrived and tripActive(trip) and nearest.Parent and nearest.Enabled
+                and (root.Position - nearestPoint).Magnitude <= range then
                 fireproximityprompt(nearest)
-                task.wait(0.15)
+                task.wait(0.3)
             end
         end)
-        returnFromAmmo(trip)
+        if tripActive(trip) then
+            local returned, returnError = pcall(walkTo, trip, trip.Origin, 3)
+            if not returned then warn("[Halloween ammo return] " .. tostring(returnError)) end
+        end
+        stopAmmoTrip(trip)
         if not ok then warn("[Halloween ammo] " .. tostring(err)) end
     end)
 end
@@ -2915,7 +2946,7 @@ function state:SetEnabled(enabled)
     self.Enabled = enabled == true and not self.Destroyed
     self.Status = self.Enabled and "Searching for zombies" or "Off"
     if not self.Enabled then
-        if ammoTrip then returnFromAmmo(ammoTrip) end
+        if ammoTrip then stopAmmoTrip(ammoTrip) end
         return
     end
     connection = game:GetService("RunService").Heartbeat:Connect(function()
