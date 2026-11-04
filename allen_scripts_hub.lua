@@ -3143,6 +3143,25 @@ local rewardBusy = false
 local qteCallbacks = {}
 local attemptedQtes = setmetatable({}, {__mode = "k"})
 local attackIds = {}
+local hitboxSizes = {Fists = Vector3.new(6, 6, 6), Pole = Vector3.new(7.5, 6, 7.5)}
+local hitboxOffset = CFrame.new(0, 1, -4)
+
+local function overlapsCharacter(cf, size, character)
+    if not character or not character.Parent then return false end
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Include
+    params.FilterDescendantsInstances = {character}
+    return #workspace:GetPartBoundsInBox(cf, size, params) > 0
+end
+
+local function threatOverlaps(threat, attackerRoot, character)
+    local reported = threat.Reported
+    if reported and os.clock() - reported.At < .08 then
+        return overlapsCharacter(reported.CFrame, reported.Size, character)
+    end
+    local size = hitboxSizes[threat.Kind]
+    return size and overlapsCharacter(attackerRoot.CFrame * hitboxOffset, size, character) or false
+end
 for _, name in ipairs({"Fists", "Pole"}) do
     local power = gameplay.Powers:FindFirstChild(name)
     local moves = power and power:FindFirstChild("Moves")
@@ -3229,7 +3248,7 @@ local function scanThreats()
                     watches[player] = {Animator = animator, Connection = animator.AnimationPlayed:Connect(function(track)
                         local id = track.Animation and track.Animation.AnimationId:match("%d+")
                         if attackIds[id] then
-                            threats[player] = {Track = track, Character = character, Used = false, At = os.clock()}
+                            threats[player] = {Track = track, Character = character, Kind = attackIds[id], Used = false, At = os.clock()}
                         end
                     end)}
                 end
@@ -3250,15 +3269,40 @@ local function activeThreat(root)
         if player.Character ~= threat.Character or not other or not threat.Track.IsPlaying or os.clock() - threat.At > 1 then
             threats[player] = nil
         elseif not threat.Used then
-            local delta = root.Position - other.Position
-            local flat = Vector3.new(delta.X, 0, delta.Z)
-            if flat.Magnitude > .1 and flat.Magnitude < 7 and math.abs(delta.Y) < 4
-                and other.CFrame.LookVector:Dot(flat.Unit) > .65 and threat.Track.TimePosition >= .04
-                and threat.Track.TimePosition < .4 then
+            if threat.Track.TimePosition >= .04 and threat.Track.TimePosition < .4
+                and threatOverlaps(threat, other, LP.Character) then
                 return threat, other
             end
         end
     end
+end
+
+local function reportedHitbox(cf, size)
+    if typeof(cf) ~= "CFrame" or typeof(size) ~= "Vector3" then return end
+    local mine = LP.Character
+    local h, ownRoot = live(mine)
+    if not ownRoot or not overlapsCharacter(cf, size, mine) then return end
+    -- The snapshot omits its owner. Reject a matching local attack and ambiguous sources.
+    local animator = h:FindFirstChildOfClass("Animator")
+    if animator and ((ownRoot.CFrame * hitboxOffset).Position - cf.Position).Magnitude <= 3 then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            local id = track.Animation and track.Animation.AnimationId:match("%d+")
+            if attackIds[id] then return end
+        end
+    end
+    local matched
+    for player, threat in pairs(threats) do
+        local _, root = live(threat.Character)
+        local expectedSize = hitboxSizes[threat.Kind]
+        if player.Character == threat.Character and root and threat.Track.IsPlaying
+            and expectedSize and (expectedSize - size).Magnitude < .01
+            and ((root.CFrame * hitboxOffset).Position - cf.Position).Magnitude <= 3
+            and root.CFrame.LookVector:Dot(cf.LookVector) > .9 then
+            if matched then return end
+            matched = threat
+        end
+    end
+    if matched then matched.Reported = {CFrame = cf, Size = size, At = os.clock()} end
 end
 
 local function espStep()
@@ -3332,7 +3376,7 @@ local function combatStep(now)
     end
     if not tool then status("Combat requires Fists or Pole in inventory"); return end
     local dodge = env.__ALLEN_MATCH_dodge
-    if dodge and dodge.Enabled and activeThreat(root) then status("Combat yielding to defense"); return end
+    if dodge and dodge.Enabled and (dodge.DefendingUntil or 0) > now then status("Combat yielding to defense"); return end
     if tool.Parent ~= character then humanoid:EquipTool(tool); return end
     local direction = target.Position - root.Position
     local flat = Vector3.new(direction.X, 0, direction.Z)
@@ -3376,7 +3420,8 @@ local function defenseStep(now)
     local humanoid, root = live(character)
     if not root or blocked(character) then status("Defense waiting for recovery"); return end
     local threat, other = activeThreat(root)
-    if not threat then status("Watching fists / pole swings"); return end
+    if not threat then status("Watching fists / pole hitbox overlap"); return end
+    S.DefendingUntil = now + .2
     status("Incoming melee · " .. other.Parent.Name)
     if now < nextAction or not dashHandler then return end
     local offset = root.Position - other.Position
@@ -3396,9 +3441,7 @@ local function defenseStep(now)
     task.delay(.06, function()
         if not S.Enabled or S.Generation ~= generation or LP.Character ~= character or blocked(character) then return end
         -- Used records remain eligible for the final direction check below.
-        local delta = root.Position - other.Position
-        if other.Parent and threat.Track.IsPlaying and delta.Magnitude < 8
-            and delta.Magnitude > .1 and other.CFrame.LookVector:Dot(delta.Unit) > .65 then
+        if other.Parent and threat.Track.IsPlaying and threatOverlaps(threat, other, character) then
             local ok, err = pcall(dashHandler)
             if ok then S.Actions += 1 else status("Dash error · " .. tostring(err)) end
         end
@@ -3540,6 +3583,12 @@ function S:SetEnabled(enabled)
     if MODE == "dodge" then dashHandler = nativeDash(); assert(dashHandler, "Native dash not ready") end
     if MODE == "qte" then prepareQte() end
     self.Enabled = true
+    if MODE == "dodge" then
+        local event = RS.Remotes.Gameplay.Combat:FindFirstChild("CreateHitbox")
+        if event and event:IsA("RemoteEvent") then
+            connections[#connections + 1] = event.OnClientEvent:Connect(reportedHitbox)
+        end
+    end
     overlay()
     status("Starting " .. MODE)
     local elapsed = 0
@@ -6494,7 +6543,7 @@ local function prepareFF()
 end
 local features={
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights and health",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
-    {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Fists / pole swings · native dash",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
+    {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitbox geometry · Fists / pole",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
     {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Auto Combat",Subtitle="Fists / pole · approach and native attacks",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
     {Id="match_qte",Section="Sky Fighters",Category="Minigames",Name="Auto QTE",Subtitle="Native shrinking-circle prompt timing",Game=8366716517,Key="__ALLEN_MATCH_qte",Source="Match",Mode="qte"},
     {Id="match_rewards",Section="Sky Fighters",Category="Utility",Name="Auto Claim Playtime Rewards",Subtitle="Claims eligible playtime rewards",Game=8366716517,Key="__ALLEN_MATCH_rewards",Source="Match",Mode="rewards"},
