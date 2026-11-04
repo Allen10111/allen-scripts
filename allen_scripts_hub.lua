@@ -2730,6 +2730,14 @@ local function hitboxEntry(root,target,range)
     local relative=root.CFrame:VectorToObjectSpace(target.AssemblyLinearVelocity-root.AssemblyLinearVelocity)
     return DashPolicy.Entry(point.X,point.Y,point.Z,relative.X,relative.Y,relative.Z,range)
 end
+local function directedThreat(root,target,range)
+    local offset=target.Position-root.Position
+    local flat=Vector3.new(offset.X,0,offset.Z)
+    local facing=Vector3.new(root.CFrame.LookVector.X,0,root.CFrame.LookVector.Z)
+    if flat.Magnitude<.1 or facing.Magnitude<.1 or facing.Unit:Dot(flat.Unit)<.65 then return end
+    local entry=hitboxEntry(root,target,range)
+    if type(entry)=="number" and entry<=.07 then return entry end
+end
 local function step()
     local now=os.clock()
     if now-lastScan>=.5 then lastScan=now;scan()end
@@ -2743,18 +2751,35 @@ local function step()
         if now>t.Expires or not t.Track.IsPlaying or p.Character~=t.Character then threats[p]=nil
         elseif not t.Attempted and now-lastAttempt>=.55 then
             local attacker,_,root=live(p)
-            local entry=attacker and weaponMatches(attacker,t.Kind)and hitboxEntry(root,r,t.Range)
-            if type(entry)=="number"then
+            local entry=attacker and weaponMatches(attacker,t.Kind)and directedThreat(root,r,t.Range)
+            local turning=false
+            if root then
+                local look=root.CFrame.LookVector
+                if t.LastLook and now>t.LastLookAt then
+                    turning=math.acos(math.clamp(look:Dot(t.LastLook),-1,1))/(now-t.LastLookAt)>4.5
+                end
+                t.LastLook=look;t.LastLookAt=now
+            end
+            if type(entry)~="number" or turning then t.DirectedSince=nil
+            elseif not t.DirectedSince then t.DirectedSince=now end
+            if type(entry)=="number" and not turning and t.DirectedSince and now-t.DirectedSince>=.05 then
                 if UIS:GetFocusedTextBox()then S.Status="Close text input to dodge";return end
                 local handler,reason=slotHandler()
                 if not handler then S.Status=reason or "Native hotbar handler unavailable";return end
-                -- Consume before spawning: each animation record gets at most one input pair.
-                t.Attempted=true;lastAttempt=now;S.Attempts+=1;statusUntil=now+2
+                -- Recheck current geometry in the callback task before consuming this swing.
                 local generation=S.Generation
                 local attempt={Observed=false};S.PendingInput=attempt
-                log(entry>0 and "dash attack predicted; native button attempt"or"box overlap; native button attempt",S.Attempts,"ETA",entry)
                 task.spawn(function()
                     if not S.Enabled or generation~=S.Generation or LP.Character~=c then return end
+                    if threats[p]~=t or t.Attempted or not t.Track.IsPlaying or p.Character~=attacker
+                        or not root.Parent or not r.Parent or cooldown(c)
+                        or type(directedThreat(root,r,t.Range))~="number"then
+                        t.DirectedSince=nil
+                        if S.PendingInput==attempt then S.PendingInput=nil end
+                        return
+                    end
+                    t.Attempted=true;lastAttempt=os.clock();S.Attempts+=1;statusUntil=lastAttempt+2
+                    log("confirmed directed swing; native button attempt",S.Attempts,"ETA",entry)
                     local ok,err=pcall(handler)
                     if not ok then
                         log("native button error",tostring(err));S:SetEnabled(false);S.Status="Native hotbar handler failed";return
