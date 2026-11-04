@@ -2808,13 +2808,26 @@ local state = {HubOnly = true, Enabled = false, Status = "Off"}
 local connection
 local nextStep, nextReload, nextPickup = 0, 0, 0
 
-local movingForAmmo = false
-local function collectAmmo(root, now, humanoid)
-    if now < nextPickup then return end
-    nextPickup = now + 0.8
+local ammoTrip
+local attemptedPrompts = setmetatable({}, {__mode = "k"})
+
+local function returnFromAmmo(trip)
+    if ammoTrip ~= trip then return end
+    ammoTrip = nil
+    if player.Character == trip.Character and trip.Root.Parent == trip.Character then
+        trip.Root.CFrame = trip.Origin
+        trip.Root.AssemblyLinearVelocity = Vector3.zero
+        trip.Root.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+local function collectAmmo(root, now)
+    if ammoTrip or now < nextPickup or type(fireproximityprompt) ~= "function" then return end
+    nextPickup = now + 2
     local nearest, nearestPoint, distance = nil, nil, math.huge
     for _, prompt in ipairs(tags:GetTagged(attr.AmmoPromptTag)) do
-        if prompt:IsA("ProximityPrompt") and prompt.Enabled and prompt:IsDescendantOf(workspace) then
+        if prompt:IsA("ProximityPrompt") and prompt.Enabled and prompt:IsDescendantOf(workspace)
+            and now - (attemptedPrompts[prompt] or -math.huge) >= 5 then
             local parent = prompt.Parent
             local point = parent:IsA("Attachment") and parent.WorldPosition
                 or parent:IsA("BasePart") and parent.Position
@@ -2825,18 +2838,24 @@ local function collectAmmo(root, now, humanoid)
             end
         end
     end
-    if nearest then
-        if distance <= math.min(nearest.MaxActivationDistance, 10) then
-            if movingForAmmo then humanoid:MoveTo(root.Position); movingForAmmo = false end
-            if type(fireproximityprompt) == "function" then fireproximityprompt(nearest) end
-        else
-            movingForAmmo = true
-            humanoid:MoveTo(nearestPoint)
-        end
-    elseif movingForAmmo then
-        humanoid:MoveTo(root.Position)
-        movingForAmmo = false
-    end
+    if not nearest then return end
+    attemptedPrompts[nearest] = now
+    local trip = {Root = root, Character = player.Character, Origin = root.CFrame}
+    ammoTrip = trip
+    task.spawn(function()
+        local ok, err = pcall(function()
+            root.CFrame = CFrame.new(nearestPoint + Vector3.new(0, 2, 0)) * trip.Origin.Rotation
+            root.AssemblyLinearVelocity = Vector3.zero
+            task.wait(0.15)
+            if ammoTrip ~= trip or not state.Enabled or player.Character ~= trip.Character then return end
+            if nearest.Parent and nearest.Enabled then
+                fireproximityprompt(nearest)
+                task.wait(0.15)
+            end
+        end)
+        returnFromAmmo(trip)
+        if not ok then warn("[Halloween ammo] " .. tostring(err)) end
+    end)
 end
 
 local function step(now)
@@ -2848,7 +2867,8 @@ local function step(now)
         state.Status = "Waiting for survivor team"
         return
     end
-    collectAmmo(root, now, humanoid)
+    collectAmmo(root, now)
+    if ammoTrip then state.Status = "Collecting ammo / returning"; return end
     local tool = character:FindFirstChildOfClass("Tool")
     if not tool or not combat.IsActiveEventTool(tool) or not character:GetAttribute("HoldingWeapon") then
         state.Status = "Equip an event gun"
@@ -2895,11 +2915,7 @@ function state:SetEnabled(enabled)
     self.Enabled = enabled == true and not self.Destroyed
     self.Status = self.Enabled and "Searching for zombies" or "Off"
     if not self.Enabled then
-        local character = player.Character
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        local root = character and character:FindFirstChild("HumanoidRootPart")
-        if movingForAmmo and humanoid and root then humanoid:MoveTo(root.Position) end
-        movingForAmmo = false
+        if ammoTrip then returnFromAmmo(ammoTrip) end
         return
     end
     connection = game:GetService("RunService").Heartbeat:Connect(function()
