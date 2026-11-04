@@ -2791,6 +2791,115 @@ env.__ALLEN_HNS_dodge=S
 return S
 
 ]====],
+HalloweenShoot=[====[
+assert(game.PlaceId == 105920136178200, "Open the Ink Game Halloween event")
+local env = getgenv()
+local key = "__ALLEN_HALLOWEEN_SHOOT"
+if env[key] then env[key]:Destroy() end
+
+local player = game:GetService("Players").LocalPlayer
+local rs = game:GetService("ReplicatedStorage")
+local tags = game:GetService("CollectionService")
+local gun = require(rs.Modules.GunFunctions)
+local gunClient = require(rs.Modules.GunSystemClient)
+local combat = require(rs.Modules.Halloween2026Combat)
+local attr = combat.Attr
+local state = {HubOnly = true, Enabled = false, Status = "Off"}
+local connection
+local nextStep, nextReload, nextPickup = 0, 0, 0
+
+local function collectAmmo(root, now)
+    if now < nextPickup or type(fireproximityprompt) ~= "function" then return end
+    nextPickup = now + 0.8
+    for _, prompt in ipairs(tags:GetTagged(attr.AmmoPromptTag)) do
+        if prompt:IsA("ProximityPrompt") and prompt.Enabled and prompt:IsDescendantOf(workspace) then
+            local parent = prompt.Parent
+            local point = parent:IsA("Attachment") and parent.WorldPosition
+                or parent:IsA("BasePart") and parent.Position
+                or parent:IsA("Model") and parent:GetPivot().Position
+            if point and (point - root.Position).Magnitude <= math.min(prompt.MaxActivationDistance, 10) then
+                fireproximityprompt(prompt)
+                return
+            end
+        end
+    end
+end
+
+local function step(now)
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not root or not humanoid or humanoid.Health <= 0 then return end
+    collectAmmo(root, now)
+    local tool = character:FindFirstChildOfClass("Tool")
+    if not tool or not combat.IsActiveEventTool(tool) or not character:GetAttribute("HoldingWeapon") then
+        state.Status = "Equip an event gun"
+        return
+    end
+    local info = tool:FindFirstChild("InfoClient")
+    local bullets = info and info:FindFirstChild("Bullets")
+    if bullets and bullets.Value <= 0 then
+        if now >= nextReload then
+            nextReload = now + 1
+            gunClient.Reload(character)
+        end
+        state.Status = "Reloading / waiting for ammo"
+        return
+    end
+    if character:FindFirstChild("CurrentlyReloading") or character:FindFirstChild("CD " .. tool.Name) then return end
+    local live = workspace:FindFirstChild("Live")
+    if not live then return end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character}
+    local aim, best = nil, 250
+    for _, model in ipairs(live:GetChildren()) do
+        if model:IsA("Model") and model.Name:match("^_InfectedZombie%d+$") then
+            local hp = model:FindFirstChildOfClass("Humanoid")
+            local target = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart")
+            if hp and hp.Health > 0 and target and target:IsA("BasePart") then
+                local offset = target.Position - root.Position
+                if offset.Magnitude < best then
+                    local hit = workspace:Raycast(root.Position, offset, params)
+                    if not hit or hit.Instance:IsDescendantOf(model) then
+                        aim, best = target.Position, offset.Magnitude
+                    end
+                end
+            end
+        end
+    end
+    state.Status = aim and "Firing at zombies" or "Waiting for a clear shot"
+    if aim then gun.FiredGun(character, aim, {CustomFireFrom = true}) end
+end
+
+function state:SetEnabled(enabled)
+    if connection then connection:Disconnect(); connection = nil end
+    self.Enabled = enabled == true and not self.Destroyed
+    self.Status = self.Enabled and "Searching for zombies" or "Off"
+    if not self.Enabled then return end
+    connection = game:GetService("RunService").Heartbeat:Connect(function()
+        local now = os.clock()
+        if now < nextStep then return end
+        nextStep = now + 0.08
+        local ok, err = pcall(step, now)
+        if not ok then
+            self:SetEnabled(false)
+            self.Status = "Stopped: " .. tostring(err)
+            warn(self.Status)
+        end
+    end)
+end
+
+function state:Destroy()
+    self:SetEnabled(false)
+    self.Destroyed = true
+    if env[key] == self then env[key] = nil end
+end
+
+env[key] = state
+return state
+
+]====],
 PA=[====[
 assert(game.GameId==4557322431,"Open Project: Afternight")
 local env=getgenv()
@@ -5707,6 +5816,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="halloweenshoot",Section="Ink Game",Category="Combat",Name="Halloween Auto Shoot + Ammo",Subtitle="Zombie NPCs and nearby ammo stations",Badge="Halloween",Game=INK,Key="__ALLEN_HALLOWEEN_SHOOT",Source="HalloweenShoot"},
     {Id="pa",Section="Project: Afternight",Category="Rhythm",Name="Auto Play",Subtitle="Native botplay · taps and holds · game scoring rules",Badge="New",Game=4557322431,Key="__ALLEN_PA_AUTOPLAY",Source="PA"},
     {Id="ubgcombat",Section="Untitled Boxing Game",Category="Combat",Name="Auto Combat",Subtitle="Timed counters · stamina-aware defense · safe footwork",Badge="New",Game=UBG,Key="__ALLEN_UBG_COMBAT",Source="UBGCombat"},
     {Id="remotespy",Section="Universal",Category="Alerts",Name="Remote Spy (Cobalt)",Subtitle="Cobalt inspector GUI · ON loads / OFF unloads",Badge="Developer",Key="__ALLEN_REMOTE_SPY",Source="RemoteSpy"},
