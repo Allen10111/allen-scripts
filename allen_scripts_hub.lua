@@ -3142,7 +3142,7 @@ local key = "__ALLEN_MATCH_" .. MODE
 if env[key] then env[key]:Destroy() end
 local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0, QTEEnabled = true, ItemDodgeEnabled = true}
 local connections, markers, watches, threats = {}, {}, {}, {}
-local ui, label, folder, dashHandler
+local folder, dashHandler
 local nextScan, nextAction, nextSlow = 0, 0, 0
 local rewardBusy = false
 local qteCallbacks = {}
@@ -3197,31 +3197,15 @@ local function blocked(character)
         or States.HasAny(character, {"CombatDisabled", "Busy", "Ragdolled", "Stunned", "Immobilized", "MovementInputDisabled"})
 end
 
-local function overlay()
-    ui = Instance.new("ScreenGui")
-    ui.Name = "AllenMatch_" .. MODE
-    ui.ResetOnSpawn = false
-    ui.Parent = LP.PlayerGui
+local function prepareVisuals()
+    if MODE ~= "esp" then return end
     folder = Instance.new("Folder")
-    folder.Parent = ui
-    if MODE ~= "esp" then
-        label = Instance.new("TextLabel")
-        label.AnchorPoint = Vector2.new(0.5, 0)
-        label.Position = UDim2.fromScale(0.5, ({combat=.10, dodge=.15, qte=.20, rewards=.25, cooldown=.30, bloodmoon=.35, candy=.40, dodgeitem=.45})[MODE] or .1)
-        label.Size = UDim2.new(.8, 0, 0, 25)
-        label.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-        label.BackgroundTransparency = .25
-        label.TextColor3 = Color3.new(1, 1, 1)
-        label.TextSize = 13
-        label.Font = Enum.Font.Gotham
-        label.Text = "Starting " .. MODE
-        label.Parent = ui
-    end
+    folder.Name = "AllenSkyESP"
+    folder.Parent = workspace
 end
 
 local function status(text)
     S.Status = text
-    if label then label.Text = text end
 end
 
 local function nativeDash()
@@ -3327,7 +3311,6 @@ local function espStep()
             local marker = markers[player]
             if marker and (not r or marker.Character ~= player.Character) then
                 marker.Highlight:Destroy()
-                marker.Gui:Destroy()
                 markers[player] = nil
                 marker = nil
             end
@@ -3339,29 +3322,15 @@ local function espStep()
                     highlight.FillTransparency = .6
                     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                     highlight.Parent = folder
-                    local gui = Instance.new("BillboardGui")
-                    gui.Adornee = r
-                    gui.AlwaysOnTop = true
-                    gui.Size = UDim2.fromOffset(180, 30)
-                    gui.StudsOffset = Vector3.new(0, 3.5, 0)
-                    gui.Parent = folder
-                    local text = Instance.new("TextLabel")
-                    text.Size = UDim2.fromScale(1, 1)
-                    text.BackgroundTransparency = 1
-                    text.TextColor3 = Color3.new(1, 1, 1)
-                    text.TextStrokeTransparency = .25
-                    text.TextSize = 13
-                    text.Parent = gui
-                    marker = {Character = player.Character, Highlight = highlight, Gui = gui, Text = text}
+                    marker = {Character = player.Character, Highlight = highlight}
                     markers[player] = marker
                 end
-                marker.Text.Text = player.DisplayName .. " · " .. math.ceil(h.Health) .. " HP"
                 count += 1
             end
         end
     end
     for player, marker in pairs(markers) do
-        if player.Parent ~= Players then marker.Highlight:Destroy(); marker.Gui:Destroy(); markers[player] = nil end
+        if player.Parent ~= Players then marker.Highlight:Destroy(); markers[player] = nil end
     end
     status(count .. " players marked")
 end
@@ -4305,7 +4274,7 @@ local function stop()
     if qteLibrary and qteLibrary.new == wrappedQteNew then qteLibrary.new = originalQteNew end
     if MODE == "combat" then stopAdvancedCombat() end
     if MODE == "dodgeitem" then stopItemDodge() end
-    if ui then ui:Destroy(); ui, label, folder = nil, nil, nil end
+    if folder then folder:Destroy(); folder = nil end
     local h, r = live(S.Moving)
     if h and S.Moving == LP.Character then h:MoveTo(r.Position) end
     S.Moving = nil
@@ -4348,7 +4317,7 @@ function S:SetEnabled(enabled)
             connections[#connections + 1] = event.OnClientEvent:Connect(reportedHitbox)
         end
     end
-    overlay()
+    prepareVisuals()
     status("Starting " .. MODE)
     local elapsed = 0
     nextScan, nextSlow = 0, 0
@@ -7288,10 +7257,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r19",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r20",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r19 · Sky Fighters native dodge item · all features OFF."
+local note="Build r20 · Sky Fighters hub controls · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7321,7 +7290,7 @@ local function prepareFF()
 end
 local features={
     {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Use Dodge Item",Subtitle="Owned Flowstate Dodge · native hitbox threats",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
-    {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights and health",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
+    {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
     {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitbox geometry · Fists / pole",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
     {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive combat · map navigation · auto QTE · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
     {Id="match_qte",Section="Sky Fighters",Category="Minigames",Name="Auto QTE",Subtitle="Native shrinking-circle prompt timing",Game=8366716517,Key="__ALLEN_MATCH_qte",Source="Match",Mode="qte"},
@@ -7479,7 +7448,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R19",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R20",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
