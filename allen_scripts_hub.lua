@@ -3143,6 +3143,7 @@ local rewardBusy = false
 local qteCallbacks = {}
 local attemptedQtes = setmetatable({}, {__mode = "k"})
 local attackIds = {}
+local observeSwing
 local hitboxSizes = {Fists = Vector3.new(6, 6, 6), Pole = Vector3.new(7.5, 6, 7.5)}
 local hitboxOffset = CFrame.new(0, 1, -4)
 
@@ -3248,7 +3249,12 @@ local function scanThreats()
                     watches[player] = {Animator = animator, Connection = animator.AnimationPlayed:Connect(function(track)
                         local id = track.Animation and track.Animation.AnimationId:match("%d+")
                         if attackIds[id] then
-                            threats[player] = {Track = track, Character = character, Kind = attackIds[id], Used = false, At = os.clock()}
+                            local contact = .16
+                            local ok, marker = pcall(track.GetTimeOfKeyframe, track, "Start")
+                            if ok and type(marker) == "number" and marker >= 0 and marker < 1 then contact = marker end
+                            local threat = {Track = track, Character = character, Kind = attackIds[id], Used = false, At = os.clock(), Contact = contact}
+                            threats[player] = threat
+                            if observeSwing then observeSwing(player, threat) end
                         end
                     end)}
                 end
@@ -3352,69 +3358,463 @@ local function espStep()
     status(count .. " players marked")
 end
 
-local function combatStep(now)
-    local character = LP.Character
-    local humanoid, root = live(character)
-    if not root or blocked(character) then status("Combat waiting for recovery"); return end
-    local target, distance = nil, 45
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LP then
-            local _, other = live(player.Character)
-            if other and not States.HasAny(player.Character, {"Invincible", "Ragdolled"}) then
-                local d = (other.Position - root.Position).Magnitude
-                if d < distance then target, distance = other, d end
+local CombatPolicy = (function()
+local Policy = {}
+
+function Policy.Observe(profile, now, rushing)
+    local interval = profile.LastAttack and now - profile.LastAttack
+    if interval and interval >= .1 and interval <= 3 then
+        profile.Interval = profile.Interval and profile.Interval * .75 + interval * .25 or interval
+        profile.IntervalSamples = math.min(100, (profile.IntervalSamples or 0) + 1)
+    end
+    profile.LastAttack = now
+    profile.Attacks = math.min(1000, (profile.Attacks or 0) + 1)
+    profile.Rushes = math.min(1000, (profile.Rushes or 0) + (rushing and 1 or 0))
+end
+
+function Policy.Decide(s)
+    if s.Blocked or not s.Target then return "recover" end
+    if s.Warning or s.Threat then
+        if s.CanDash and s.FreshThreat then return "evade_dash" end
+        return "evade"
+    end
+    if s.Health < .28 or s.NearbyEnemies >= 3 then return "retreat" end
+    if s.TargetRushing and s.Distance < 13 and not s.CanHit then return "sidestep" end
+    if s.CanHit and s.CanPunch then
+        if s.TargetVulnerable or s.OwnDashing or not s.ExpectedAttackSoon then return "strike" end
+    end
+    if s.Distance > s.Reach then
+        if s.CanDash and s.Distance >= 20 and s.Distance <= 30 and not s.TargetRushing
+            and s.SafeLongRoute and not s.ExpectedAttackSoon then return "approach_dash" end
+        return "approach"
+    end
+    if s.Distance < 2.3 then return "space" end
+    return "circle"
+end
+
+function Policy.PreferredSide(profile, alternate)
+    local left = ((profile.LeftDamage or 0) + 1) / ((profile.LeftUses or 0) + 2)
+    local right = ((profile.RightDamage or 0) + 1) / ((profile.RightUses or 0) + 2)
+    if math.abs(left - right) < .15 then return alternate end
+    return left < right and -1 or 1
+end
+
+return Policy
+
+end)()
+local brain = {
+    Profiles = {}, Warnings = {}, Target = nil, TargetScan = 0, LastMove = 0,
+    NextPunch = 0, NextJump = 0, NextDash = 0, NextSprint = 0, Side = 1,
+    Character = nil, LastHealth = nil, PendingOutcome = nil, PendingPunch = nil,
+    PendingDash = nil, WarningConnection = nil, OwnConnection = nil
+}
+S.AttackRequests, S.DashRequests, S.JumpRequests = 0, 0, 0
+S.ConfirmedAttacks, S.ConfirmedDashes, S.DamageObserved, S.MaxStepMs = 0, 0, 0, 0
+
+local function profileFor(player)
+    local id = player.UserId or player.Name
+    if not brain.Profiles[id] then brain.Profiles[id] = {Attacks = 0, Rushes = 0} end
+    return brain.Profiles[id]
+end
+
+observeSwing = function(player, threat)
+    if MODE ~= "combat" then return end
+    local _, root = live(threat.Character)
+    CombatPolicy.Observe(profileFor(player), threat.At, root and root.AssemblyLinearVelocity.Magnitude > 35)
+end
+
+local function dashReady()
+    if not dashHandler then return false end
+    local values = debug.getupvalues(dashHandler)
+    return values[5] == false and values[6] == true
+end
+
+local function nativeLocomotion(character)
+    for _, connection in ipairs(getconnections(UIS.InputBegan)) do
+        local fn = connection.Function
+        if type(fn) == "function" then
+            local source = getfenv(fn).script
+            if source and source.Name == "LocomotionController" then
+                for _, value in pairs(debug.getupvalues(fn)) do
+                    if type(value) == "table" and rawget(value, "Character") == character
+                        and type(value.ToggleSprint) == "function" then return value end
+                end
             end
         end
     end
-    if not target then status("Combat waiting for a nearby opponent"); return end
-    local tool
-    for _, container in ipairs({character, LP.Backpack}) do
-        for _, candidate in ipairs(container:GetChildren()) do
-            if candidate:IsA("Tool") and (candidate.Name == "Fists" or candidate.Name == "Pole") then tool = candidate; break end
-        end
-        if tool then break end
+end
+
+local function restoreCombatCharacter()
+    if brain.OwnConnection then brain.OwnConnection:Disconnect(); brain.OwnConnection = nil end
+    if brain.Humanoid and brain.Humanoid.Parent then brain.Humanoid.AutoRotate = brain.AutoRotate end
+    if brain.Locomotion and brain.Locomotion.Character == LP.Character then
+        brain.Locomotion.SprintKeyHeld = brain.SprintHeld
+        pcall(brain.Locomotion.ToggleSprint, brain.Locomotion, brain.SprintHeld == true)
     end
-    if not tool then status("Combat requires Fists or Pole in inventory"); return end
-    local dodge = env.__ALLEN_MATCH_dodge
-    if dodge and dodge.Enabled and (dodge.DefendingUntil or 0) > now then status("Combat yielding to defense"); return end
-    if tool.Parent ~= character then humanoid:EquipTool(tool); return end
-    local direction = target.Position - root.Position
-    local flat = Vector3.new(direction.X, 0, direction.Z)
-    if flat.Magnitude < .1 then return end
-    if distance > 5.5 then
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = {character, target.Parent}
-        local step = flat.Unit * math.min(3, flat.Magnitude)
-        if not workspace:Raycast(root.Position, step, params)
-            and workspace:Raycast(root.Position + step, Vector3.new(0, -9, 0), params) then
-            humanoid:MoveTo(target.Position - flat.Unit * 4)
-            S.Moving = character
-        end
-        status("Combat approaching " .. target.Parent.Name)
-    elseif now >= nextAction then
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = {character, target.Parent}
-        if workspace:Raycast(root.Position, target.Position - root.Position, params) then
-            status("Combat waiting for a clear strike")
-            return
-        end
-        humanoid:MoveTo(root.Position)
-        root.CFrame = CFrame.lookAt(root.Position, root.Position + flat)
-        local activation = tool:FindFirstChild("HotbarActivated")
-        if activation and activation:IsA("BindableEvent") then
-            activation:Fire()
-            local release = tool:FindFirstChild("HotbarDeactivated")
-            if release and release:IsA("BindableEvent") then release:Fire() end
-            nextAction = now + .5
-            S.Actions += 1
-            status("Combat native attack · " .. S.Actions .. " requests")
-        else status("Waiting for native weapon activation") end
+    brain.Character, brain.Humanoid, brain.Locomotion = nil, nil, nil
+end
+
+local function bindCombatCharacter(character, humanoid)
+    if brain.Character == character then return end
+    restoreCombatCharacter()
+    brain.Character, brain.Humanoid = character, humanoid
+    brain.AutoRotate = humanoid.AutoRotate
+    humanoid.AutoRotate = false
+    brain.Locomotion = nativeLocomotion(character)
+    brain.SprintHeld = brain.Locomotion and brain.Locomotion.SprintKeyHeld
+    brain.LastHealth, brain.PendingOutcome = humanoid.Health, nil
+    brain.PendingPunch, brain.PendingDash = nil, nil
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if animator then
+        brain.OwnConnection = animator.AnimationPlayed:Connect(function(track)
+            local id = track.Animation and track.Animation.AnimationId:match("%d+")
+            local pending = brain.PendingPunch
+            if attackIds[id] and pending and os.clock() - pending.At < .6 and not pending.Observed then
+                pending.Observed = true
+                S.ConfirmedAttacks += 1
+            end
+        end)
     end
 end
 
+local function observeOutcome(humanoid, now)
+    local damage = brain.LastHealth and math.max(0, brain.LastHealth - humanoid.Health) or 0
+    brain.LastHealth = humanoid.Health
+    S.DamageObserved += damage
+    local pending = brain.PendingOutcome
+    if pending then
+        if damage > 0 and now - pending.At <= .5 then
+            local field = pending.Side < 0 and "LeftDamage" or "RightDamage"
+            pending.Profile[field] = math.min(1000, (pending.Profile[field] or 0) + damage)
+            brain.PendingOutcome = nil
+        elseif now - pending.At > .5 then brain.PendingOutcome = nil end
+    end
+    if brain.PendingDash then
+        if brain.Character and brain.Character:FindFirstChild("HumanoidRootPart")
+            and brain.Character.HumanoidRootPart:FindFirstChild("DashVelocity") then
+            S.ConfirmedDashes += 1
+            brain.PendingDash = nil
+        elseif now - brain.PendingDash > .4 then brain.PendingDash = nil end
+    end
+end
+
+local function watchWarning(part)
+    if not part:IsA("BasePart") or not part.Name:match("^RubberGodMove1Warning_")
+        or part:GetAttribute("RubberGodVFX") ~= true then return end
+    if LP.Character and part.Name == "RubberGodMove1Warning_" .. LP.Character.Name then return end
+    brain.Warnings[part] = {Used = false}
+end
+
+local function prepareAdvancedCombat()
+    dashHandler = nativeDash()
+    assert(dashHandler, "Native Q dash interface not ready")
+    local module = LP.PlayerScripts:FindFirstChild("PlayerModule")
+    assert(module, "Native movement not ready")
+    local controls = require(module):GetControls()
+    assert(type(controls.GetMoveVector) == "function", "Native movement interface changed")
+    brain.Controls, brain.OriginalMove = controls, controls.GetMoveVector
+    brain.RawMove = rawget(controls, "GetMoveVector")
+    brain.Desired = Vector3.zero
+    brain.MoveShim = function(self, ...)
+        if not S.Enabled or UIS:GetFocusedTextBox() then return brain.OriginalMove(self, ...) end
+        local camera = workspace.CurrentCamera
+        if not camera then return Vector3.zero end
+        local forward = Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
+        local right = Vector3.new(camera.CFrame.RightVector.X, 0, camera.CFrame.RightVector.Z)
+        if forward.Magnitude < .01 or right.Magnitude < .01 then return Vector3.zero end
+        return Vector3.new(brain.Desired:Dot(right.Unit), 0, -brain.Desired:Dot(forward.Unit))
+    end
+    controls.GetMoveVector = brain.MoveShim
+    local external = env.__ALLEN_MATCH_dodge
+    if external and external.Enabled then
+        external:SetEnabled(false)
+        brain.ExternalDodge, brain.ExternalGeneration = external, external.Generation
+    end
+    for _, child in ipairs(workspace:GetChildren()) do watchWarning(child) end
+    brain.WarningConnection = workspace.ChildAdded:Connect(watchWarning)
+end
+
+local function warningThreat(root)
+    for part, record in pairs(brain.Warnings) do
+        if not part:IsDescendantOf(workspace) then brain.Warnings[part] = nil
+        else
+            local point = part.CFrame:PointToObjectSpace(root.Position)
+            -- RubberGodConfig.Move1 uses a 12-stud square and 24-stud height.
+            if math.abs(point.X) < 8 and math.abs(point.Z) < 8 and point.Y > -4 and point.Y < 25 then
+                return record, part.Position
+            end
+        end
+    end
+end
+
+local function scanCombatTarget(root, now)
+    if now < brain.TargetScan and brain.Target and live(brain.Target.Character) then return brain.Target end
+    brain.TargetScan = now + .2
+    local chosen, best = nil, 45
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP then
+            local _, other = live(player.Character)
+            if other and not States.HasAny(player.Character, {"DamageImmune", "Ragdolled", "CombatDisabled"}) then
+                local distance = (other.Position - root.Position).Magnitude
+                if player == brain.Target then distance *= .8 end
+                if distance < best then chosen, best = player, distance end
+            end
+        end
+    end
+    brain.Target = chosen
+    return chosen
+end
+
+local function impendingThreat(root, now)
+    local selected, selectedRoot, bestEta
+    for player, threat in pairs(threats) do
+        local _, attacker = live(threat.Character)
+        if not attacker or player.Character ~= threat.Character or not threat.Track.IsPlaying or now - threat.At > 1.5 then
+            threats[player] = nil
+        else
+            local speed = math.max(.1, threat.Track.Speed)
+            local eta = ((threat.Contact or .16) - threat.Track.TimePosition) / speed
+            if eta >= -.12 and eta <= .2 then
+                local relative = attacker.AssemblyLinearVelocity - root.AssemblyLinearVelocity
+                if relative.Magnitude > 180 then relative = relative.Unit * 180 end
+                local size = hitboxSizes[threat.Kind]
+                for _, horizon in ipairs({0, .04, .08, .12}) do
+                    if horizon == 0 or eta >= -.02 then
+                        local cf = attacker.CFrame * hitboxOffset + relative * horizon
+                        if size and overlapsCharacter(cf, size, LP.Character) then
+                            local urgency = math.max(0, eta) + horizon
+                            if not bestEta or urgency < bestEta then
+                                selected, selectedRoot, bestEta = threat, attacker, urgency
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return selected, selectedRoot
+end
+
+local function routeClear(root, vector, target, length)
+    if vector.Magnitude < .05 then return false end
+    local direction = vector.Unit
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = target and {LP.Character, target} or {LP.Character}
+    local distance = length or 4
+    if workspace:Raycast(root.Position, direction * distance, params) then return false end
+    for _, offset in ipairs({math.min(3, distance), distance}) do
+        local floor = workspace:Raycast(root.Position + direction * offset, Vector3.new(0, -10, 0), params)
+        if not floor or floor.Normal.Y < .6 then return false end
+    end
+    return true
+end
+
+local function jumpObstacle(humanoid, root, direction, target, now)
+    if now < brain.NextJump or humanoid.FloorMaterial == Enum.Material.Air
+        or States.HasAny(LP.Character, {"JumpDisabled", "Stunned", "Ragdolled", "MovementInputDisabled"}) then return false end
+    local height = humanoid.UseJumpPower and humanoid.JumpPower ^ 2 / (2 * workspace.Gravity) or humanoid.JumpHeight
+    if height < 3 or direction.Magnitude < .1 then return false end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = target and {LP.Character, target} or {LP.Character}
+    local forward = direction.Unit * 3
+    local lower = workspace:Raycast(root.Position - Vector3.new(0, 1.5, 0), forward, params)
+    local upper = workspace:Raycast(root.Position + Vector3.new(0, math.min(3, height - 1), 0), forward, params)
+    local landing = workspace:Raycast(root.Position + forward + Vector3.new(0, 3, 0), Vector3.new(0, -12, 0), params)
+    if lower and not upper and landing and landing.Normal.Y > .6 then
+        humanoid.Jump = true
+        brain.Desired = direction.Unit
+        brain.NextJump = now + 1.1
+        S.JumpRequests += 1
+        humanoid:Move(direction.Unit, false)
+        return true
+    end
+    return false
+end
+
+local function moveCombat(humanoid, root, candidates, target, now)
+    for _, direction in ipairs(candidates) do
+        if routeClear(root, direction, target, 4) then
+            brain.Desired = direction.Magnitude > 1 and direction.Unit or direction
+            humanoid:Move(brain.Desired, false)
+            S.Moving = LP.Character
+            brain.LastMove = now
+            return direction
+        end
+    end
+    if candidates[1] and jumpObstacle(humanoid, root, candidates[1], target, now) then return candidates[1] end
+    brain.Desired = Vector3.zero
+    humanoid:Move(Vector3.zero, false)
+    return Vector3.zero
+end
+
+local function requestCombatDash(humanoid, root, direction, target, record, now)
+    if now < brain.NextDash or not dashReady() or not routeClear(root, direction, target, 18) then return false end
+    if not record then return false end
+    record.Used = true
+    brain.Desired = direction.Unit
+    humanoid:Move(direction.Unit, false)
+    dashHandler()
+    S.DashRequests += 1
+    brain.PendingDash = now
+    brain.NextDash = now + .3
+    return true
+end
+
+local function combatStep(now)
+    brain.Desired = Vector3.zero
+    local character = LP.Character
+    local humanoid, root = live(character)
+    if not root then status("Combat waiting for character"); return end
+    bindCombatCharacter(character, humanoid)
+    observeOutcome(humanoid, now)
+    if now >= nextScan then
+        nextScan = now + .4
+        scanThreats()
+        local present = {}
+        for _, p in ipairs(Players:GetPlayers()) do present[p.UserId or p.Name] = true end
+        for id in pairs(brain.Profiles) do if not present[id] then brain.Profiles[id] = nil end end
+    end
+    if blocked(character) then
+        humanoid:Move(Vector3.zero, false)
+        brain.RecoverUntil = now + .12
+        status("Combat waiting for native recovery")
+        return
+    end
+    local player = scanCombatTarget(root, now)
+    local targetRoot
+    if player then local _, target = live(player.Character); targetRoot = target end
+    if not targetRoot then
+        humanoid:Move(Vector3.zero, false)
+        status("Combat waiting for an opponent")
+        return
+    end
+    local profile = profileFor(player)
+    local flat = Vector3.new(targetRoot.Position.X - root.Position.X, 0, targetRoot.Position.Z - root.Position.Z)
+    if flat.Magnitude < .1 then return end
+    local toward = flat.Unit
+    root.CFrame = CFrame.lookAt(root.Position, root.Position + toward)
+    local side = toward:Cross(Vector3.yAxis)
+    local sideSign = CombatPolicy.PreferredSide(profile, math.floor(now / 1.3) % 2 == 0 and 1 or -1)
+    local warning, warningPosition = warningThreat(root)
+    local threat, attacker = impendingThreat(root, now)
+    local away = -toward
+    if warningPosition then
+        local delta = root.Position - warningPosition
+        away = Vector3.new(delta.X, 0, delta.Z)
+        if away.Magnitude < .1 then away = side end
+        away = away.Unit
+    elseif attacker then
+        local delta = root.Position - attacker.Position
+        local horizontal = Vector3.new(delta.X, 0, delta.Z)
+        if horizontal.Magnitude > .1 then away = horizontal.Unit end
+    end
+    if now < (brain.RecoverUntil or 0) then
+        moveCombat(humanoid, root, {away, side * sideSign, -side * sideSign}, player.Character, now)
+        status("Combat spacing after recovery")
+        return
+    end
+    local tool
+    for _, container in ipairs({character, LP.Backpack}) do
+        for _, candidate in ipairs(container:GetChildren()) do
+            if candidate:IsA("Tool") and hitboxSizes[candidate.Name] then tool = candidate; break end
+        end
+        if tool then break end
+    end
+    if tool and tool.Parent ~= character then humanoid:EquipTool(tool) end
+    local size = tool and hitboxSizes[tool.Name]
+    local canHit = size and overlapsCharacter(root.CFrame * hitboxOffset, size, player.Character) or false
+    local targetVelocity = Vector3.new(targetRoot.AssemblyLinearVelocity.X, 0, targetRoot.AssemblyLinearVelocity.Z)
+    local rushProne = profile.Attacks >= 3 and profile.Rushes / profile.Attacks > .5
+    local rushing = targetVelocity:Dot(-toward) > 12 and (targetVelocity.Magnitude > 35 or rushProne)
+    local ownDashing = root:FindFirstChild("DashVelocity") ~= nil
+    local interval = profile.Interval
+    local expected = interval and (profile.IntervalSamples or 0) >= 3 and profile.LastAttack
+        and now - profile.LastAttack < interval and interval - (now - profile.LastAttack) < .18
+    local record = threats[player]
+    local recovering = record and record.Track.IsPlaying and record.Track.TimePosition > (record.Contact or .16) + .1
+    local nearby = 0
+    for p, watch in pairs(watches) do
+        local _, other = live(p.Character)
+        if other and (other.Position - root.Position).Magnitude < 10 then nearby += 1 end
+    end
+    local snapshot = {
+        Target = true, Blocked = false, Threat = threat ~= nil, Warning = warning ~= nil,
+        FreshThreat = warning and not warning.Used or threat and not threat.Used or false,
+        CanDash = now >= brain.NextDash and dashReady(), Health = humanoid.Health / math.max(1, humanoid.MaxHealth),
+        NearbyEnemies = nearby, TargetRushing = rushing, Distance = flat.Magnitude, Reach = size and size.Z / 2 + 4 or 6,
+        CanHit = canHit, CanPunch = tool ~= nil and not tool:GetAttribute("OnCooldown") and now >= brain.NextPunch,
+        ExpectedAttackSoon = expected == true, OwnDashing = ownDashing, TargetVulnerable = recovering == true,
+        SafeLongRoute = routeClear(root, toward, player.Character, 20)
+    }
+    local decision = CombatPolicy.Decide(snapshot)
+    S.Decision, S.TargetName, S.ObservedAttacks = decision, player.Name, profile.Attacks
+    if brain.Locomotion and now >= brain.NextSprint then
+        brain.NextSprint = now + .25
+        brain.Locomotion.SprintKeyHeld = true
+        brain.Locomotion:ToggleSprint(true)
+    end
+    local move
+    if decision == "evade_dash" or decision == "evade" or decision == "sidestep" then
+        move = moveCombat(humanoid, root, warning and {away, side * sideSign, -side * sideSign}
+            or {side * sideSign, -side * sideSign, away}, player.Character, now)
+        if decision == "evade_dash" and move.Magnitude > .1 then
+            if requestCombatDash(humanoid, root, move, player.Character, warning or threat, now) then
+                local field = sideSign < 0 and "LeftUses" or "RightUses"
+                profile[field] = math.min(1000, (profile[field] or 0) + 1)
+                brain.PendingOutcome = {At = now, Side = sideSign, Profile = profile}
+            end
+        end
+    elseif decision == "retreat" or decision == "space" then
+        moveCombat(humanoid, root, {-toward + side * sideSign * .3, side * sideSign, -side * sideSign}, player.Character, now)
+    elseif decision == "approach" or decision == "approach_dash" then
+        move = moveCombat(humanoid, root, {toward, toward + side * .7, toward - side * .7}, player.Character, now)
+        if decision == "approach_dash" and move.Magnitude > .1 then
+            requestCombatDash(humanoid, root, move, player.Character, {}, now)
+        end
+    elseif decision == "circle" or decision == "strike" then
+        if not ownDashing then moveCombat(humanoid, root, {side * sideSign * .45, -side * sideSign * .45}, player.Character, now) end
+    end
+    if decision == "strike" and tool then
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {character, player.Character}
+        if not workspace:Raycast(root.Position, targetRoot.Position - root.Position, params) then
+            local activation = tool:FindFirstChild("HotbarActivated")
+            if activation and activation:IsA("BindableEvent") then
+                brain.PendingPunch = {At = now, Observed = false}
+                activation:Fire()
+                local release = tool:FindFirstChild("HotbarDeactivated")
+                if release and release:IsA("BindableEvent") then release:Fire() end
+                brain.NextPunch = now + .22
+                S.AttackRequests += 1
+            end
+        end
+    end
+    status(decision .. " · " .. player.Name .. " · " .. profile.Attacks .. " observed swings" .. (tool and "" or " · equip Fists / Pole"))
+end
+
+local function stopAdvancedCombat()
+    brain.Desired = Vector3.zero
+    if brain.Controls and brain.Controls.GetMoveVector == brain.MoveShim then brain.Controls.GetMoveVector = brain.RawMove end
+    brain.Controls, brain.MoveShim = nil, nil
+    restoreCombatCharacter()
+    if brain.WarningConnection then brain.WarningConnection:Disconnect(); brain.WarningConnection = nil end
+    brain.PendingPunch, brain.PendingDash, brain.PendingOutcome = nil, nil, nil
+    table.clear(brain.Warnings)
+    local external = brain.ExternalDodge
+    if external and not external.Destroyed and external.Generation == brain.ExternalGeneration and not external.Enabled then
+        external:SetEnabled(true)
+    end
+    brain.ExternalDodge = nil
+end
+
+
 local function defenseStep(now)
+    local full = env.__ALLEN_MATCH_combat
+    if full and full.Enabled then status("Full Auto Combat controls defense"); return end
     if now >= nextScan then nextScan = now + .5; scanThreats() end
     local character = LP.Character
     local humanoid, root = live(character)
@@ -3558,6 +3958,7 @@ local function trackerStep()
 end
 
 local function stop()
+    if MODE == "combat" then stopAdvancedCombat() end
     for _, c in ipairs(connections) do c:Disconnect() end
     table.clear(connections)
     for _, w in pairs(watches) do w.Connection:Disconnect() end
@@ -3577,13 +3978,17 @@ function S:SetEnabled(enabled)
     self.Enabled = false
     stop()
     if not enabled or self.Destroyed then self.Status = "Off"; return end
-    if MODE == "dodge" or MODE == "cooldown" then
+    if MODE == "dodge" or MODE == "cooldown" or MODE == "combat" then
         assert(type(getconnections) == "function", "Executor needs native callback inspection")
     end
     if MODE == "dodge" then dashHandler = nativeDash(); assert(dashHandler, "Native dash not ready") end
     if MODE == "qte" then prepareQte() end
+    if MODE == "combat" then
+        local ok, err = pcall(prepareAdvancedCombat)
+        if not ok then stop(); error(err, 0) end
+    end
     self.Enabled = true
-    if MODE == "dodge" then
+    if MODE == "dodge" or MODE == "combat" then
         local event = RS.Remotes.Gameplay.Combat:FindFirstChild("CreateHitbox")
         if event and event:IsA("RemoteEvent") then
             connections[#connections + 1] = event.OnClientEvent:Connect(reportedHitbox)
@@ -3595,9 +4000,10 @@ function S:SetEnabled(enabled)
     nextScan, nextSlow = 0, 0
     connections[#connections + 1] = Run.Heartbeat:Connect(function(dt)
         elapsed += dt
-        if elapsed < (MODE == "qte" and 1/30 or .1) then return end
+        if MODE ~= "combat" and MODE ~= "dodge" and elapsed < (MODE == "qte" and 1/30 or .1) then return end
         elapsed = 0
         local now = os.clock()
+        local started = os.clock()
         local ok, err = pcall(function()
             if MODE == "combat" then combatStep(now)
             elseif MODE == "dodge" then defenseStep(now)
@@ -3609,12 +4015,17 @@ function S:SetEnabled(enabled)
                 else trackerStep() end
             end
         end)
+        S.MaxStepMs = math.max(S.MaxStepMs or 0, (os.clock() - started) * 1000)
         if not ok then self:SetEnabled(false); self.Status = "Stopped · " .. tostring(err); warn("[Match " .. MODE .. "] " .. tostring(err)) end
     end)
 end
 
 function S:GetSnapshot()
-    return {Enabled = self.Enabled, Status = self.Status, Actions = self.Actions}
+    return {Enabled = self.Enabled, Status = self.Status, Actions = self.Actions,
+        Decision = self.Decision, Target = self.TargetName, ObservedAttacks = self.ObservedAttacks,
+        AttackRequests = self.AttackRequests, DashRequests = self.DashRequests, JumpRequests = self.JumpRequests,
+        ConfirmedAttacks = self.ConfirmedAttacks, ConfirmedDashes = self.ConfirmedDashes,
+        DamageObserved = self.DamageObserved, MaxStepMs = self.MaxStepMs}
 end
 function S:Destroy()
     self:SetEnabled(false)
@@ -6510,10 +6921,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r15",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r16",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r15 · Sky Fighters features · all features OFF."
+local note="Build r16 · adaptive Sky Fighters combat · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -6544,7 +6955,7 @@ end
 local features={
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights and health",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
     {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitbox geometry · Fists / pole",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
-    {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Auto Combat",Subtitle="Fists / pole · approach and native attacks",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
+    {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive spacing · dash-punches · native warnings · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
     {Id="match_qte",Section="Sky Fighters",Category="Minigames",Name="Auto QTE",Subtitle="Native shrinking-circle prompt timing",Game=8366716517,Key="__ALLEN_MATCH_qte",Source="Match",Mode="qte"},
     {Id="match_rewards",Section="Sky Fighters",Category="Utility",Name="Auto Claim Playtime Rewards",Subtitle="Claims eligible playtime rewards",Game=8366716517,Key="__ALLEN_MATCH_rewards",Source="Match",Mode="rewards"},
     {Id="match_cooldown",Section="Sky Fighters",Category="Alerts",Name="Cooldown Display",Subtitle="Native dash readiness and available power timers",Game=8366716517,Key="__ALLEN_MATCH_cooldown",Source="Match",Mode="cooldown"},
@@ -6696,7 +7107,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R15",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R16",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
