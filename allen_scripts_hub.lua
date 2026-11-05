@@ -3156,6 +3156,24 @@ local nextScan, nextAction, nextSlow = 0, 0, 0
 local rewardBusy = false
 local qteCallbacks = {}
 local attemptedQtes = setmetatable({}, {__mode = "k"})
+local ThreatPolicy = (function()
+local Policy = {}
+function Policy.Eligible(record, now)
+    return not record.Used and not record.ItemAttempted
+        and (record.ItemAttempts or 0) < 2 and now >= (record.RetryAt or 0)
+end
+function Policy.ReportFresh(record, now)
+    return record.Reported ~= nil and now - record.Reported.At >= 0 and now - record.Reported.At <= .12
+end
+function Policy.Contact(kind, index)
+    local times = {.3166666626930237, .28333333134651184, .38333332538604736}
+    if kind == "Katana" then return times[index] end
+    if kind == "Scythe" and times[index] then return times[index] * 1.3 end
+    if kind == "Gun" and times[index] then return times[index] * ({1.5, 2.15, 1.8})[index] end
+end
+return Policy
+
+end)()
 local attackIds = {}
 local attackContacts = {}
 local observeSwing
@@ -3203,12 +3221,8 @@ for _, profile in ipairs({
                 local id = animation.AnimationId:match("%d+")
                 if id then
                     attackIds[id] = profile.Kind
-                    if profile.Kind == "Gun" then
-                        local index = tonumber(animation.Name:match("%d+"))
-                        local times = {.3166666626930237, .28333333134651184, .38333332538604736}
-                        local rates = {1.5, 2.15, 1.8}
-                        if times[index] then attackContacts[id] = times[index] * rates[index] end
-                    end
+                    local index = tonumber(animation.Name:match("%d+"))
+                    attackContacts[id] = ThreatPolicy.Contact(profile.Kind, index)
                 end
             end
         end
@@ -3267,19 +3281,21 @@ local function scanThreats()
                 present[player] = animator
                 if not watches[player] or watches[player].Animator ~= animator then
                     if watches[player] then watches[player].Connection:Disconnect() end
-                    watches[player] = {Animator = animator, Connection = animator.AnimationPlayed:Connect(function(track)
+                    local function observeTrack(track)
                         local id = track.Animation and track.Animation.AnimationId:match("%d+")
                         if attackIds[id] then
                             local contact = attackContacts[id] or .16
                             if not attackContacts[id] then
                                 local ok, marker = pcall(track.GetTimeOfKeyframe, track, "Start")
-                                if ok and type(marker) == "number" and marker >= 0 and marker < 1 then contact = marker end
+                                if ok and type(marker) == "number" and marker > 0 and marker < 1 then contact = marker end
                             end
-                            local threat = {Track = track, Character = character, Kind = attackIds[id], Used = false, At = os.clock(), Contact = contact}
+                            local threat = {Track = track, Character = character, Kind = attackIds[id], Used = false, At = os.clock(), Contact = contact, ContactVerified = attackContacts[id] ~= nil}
                             threats[player] = threat
                             if observeSwing then observeSwing(player, threat) end
                         end
-                    end)}
+                    end
+                    watches[player] = {Animator = animator, Connection = animator.AnimationPlayed:Connect(observeTrack)}
+                    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do observeTrack(track) end
                 end
             end
         end
@@ -3295,10 +3311,12 @@ end
 local function activeThreat(root)
     for player, threat in pairs(threats) do
         local _, other = live(threat.Character)
-        if player.Character ~= threat.Character or not other or not threat.Track.IsPlaying or os.clock() - threat.At > 1 then
+        if player.Character ~= threat.Character or not other or os.clock() - threat.At > 1 then
             threats[player] = nil
         elseif not threat.Used then
-            if threat.Track.TimePosition >= .04 and threat.Track.TimePosition < .4
+            if ThreatPolicy.ReportFresh(threat, os.clock()) and threatOverlaps(threat, other, LP.Character) then
+                return threat, other
+            elseif threat.Track and threat.Track.IsPlaying and threat.Track.TimePosition >= .04 and threat.Track.TimePosition < .4
                 and threatOverlaps(threat, other, LP.Character) then
                 return threat, other
             end
@@ -3308,30 +3326,31 @@ end
 
 local function reportedHitbox(cf, size)
     if typeof(cf) ~= "CFrame" or typeof(size) ~= "Vector3" then return end
+    if size.X <= 0 or size.Y <= 0 or size.Z <= 0 or size.Magnitude > 200 then return end
     local mine = LP.Character
-    local h, ownRoot = live(mine)
+    local _, ownRoot = live(mine)
     if not ownRoot or not overlapsCharacter(cf, size, mine) then return end
-    -- The snapshot omits its owner. Reject a matching local attack and ambiguous sources.
-    local animator = h:FindFirstChildOfClass("Animator")
-    if animator and ((ownRoot.CFrame * hitboxOffset).Position - cf.Position).Magnitude <= 3 then
-        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-            local id = track.Animation and track.Animation.AnimationId:match("%d+")
-            if attackIds[id] then return end
-        end
-    end
-    local matched
-    for player, threat in pairs(threats) do
-        local _, root = live(threat.Character)
-        local expectedSize = hitboxSizes[threat.Kind]
-        if player.Character == threat.Character and root and threat.Track.IsPlaying
-            and expectedSize and (expectedSize - size).Magnitude < .01
-            and ((root.CFrame * hitboxOffset).Position - cf.Position).Magnitude <= 3
+    local owner, ownerCharacter
+    -- CreateHitbox omits the owner: require exactly one plausible origin,
+    -- including the local player in the ambiguity check.
+    for _, player in ipairs(Players:GetPlayers()) do
+        local _, root = live(player.Character)
+        if root and ((root.CFrame * hitboxOffset).Position - cf.Position).Magnitude <= 3
             and root.CFrame.LookVector:Dot(cf.LookVector) > .9 then
-            if matched then return end
-            matched = threat
+            if owner then return end
+            owner, ownerCharacter = player, player.Character
         end
     end
-    if matched then matched.Reported = {CFrame = cf, Size = size, At = os.clock()} end
+    if not owner or owner == LP then return end
+    local now = os.clock()
+    local record = threats[owner]
+    if not record or record.Character ~= ownerCharacter
+        or (record.ReportedOnly and now - record.At > .25)
+        or (record.Track and not record.Track.IsPlaying) then
+        record = {Character = ownerCharacter, At = now, ReportedOnly = true, Used = false}
+        threats[owner] = record
+    end
+    record.Reported = {CFrame = cf, Size = size, At = now}
 end
 
 local function espStep()
@@ -3637,27 +3656,42 @@ impendingThreat = function(root, now)
     local selected, selectedRoot, bestEta
     for player, threat in pairs(threats) do
         local _, attacker = live(threat.Character)
-        if not attacker or player.Character ~= threat.Character or not threat.Track.IsPlaying or now - threat.At > 1.5 then
+        local reported = ThreatPolicy.ReportFresh(threat, now)
+        local playing = threat.Track and threat.Track.IsPlaying
+        if not attacker or player.Character ~= threat.Character or now - threat.At > 1.5
+            or (not playing and not reported) then
             threats[player] = nil
-        else
-            local speed = math.max(.1, threat.Track.Speed)
-            local eta = ((threat.Contact or .16) - threat.Track.TimePosition) / speed
-            if eta >= -.12 and eta <= lead then
-                local relative = attacker.AssemblyLinearVelocity - root.AssemblyLinearVelocity
-                if relative.Magnitude > 180 then relative = relative.Unit * 180 end
-                local size = hitboxSizes[threat.Kind]
-                for _, horizon in ipairs({0, .04, .08, .12}) do
-                    if horizon == 0 or eta >= -.02 then
+        elseif ThreatPolicy.Eligible(threat, now) then
+            local eta
+            if reported and overlapsCharacter(threat.Reported.CFrame, threat.Reported.Size, LP.Character) then
+                eta = 0
+                threat.Evidence = "Native hitbox"
+            elseif playing then
+                local speed = math.max(.1, threat.Track.Speed)
+                local contact = threat.Contact or .16
+                if not threat.ContactVerified then
+                    local ok, marker = pcall(threat.Track.GetTimeOfKeyframe, threat.Track, "Start")
+                    if ok and type(marker) == "number" and marker > 0 and marker < 1 then
+                        contact, threat.Contact, threat.ContactVerified = marker, marker, true
+                    end
+                end
+                local candidate = (contact - threat.Track.TimePosition) / speed
+                if candidate >= -.12 and candidate <= lead then
+                    local relative = attacker.AssemblyLinearVelocity - root.AssemblyLinearVelocity
+                    if relative.Magnitude > 180 then relative = relative.Unit * 180 end
+                    local size = hitboxSizes[threat.Kind]
+                    for _, horizon in ipairs({0, math.clamp(candidate, 0, .18)}) do
                         local cf = attacker.CFrame * hitboxOffset + relative * horizon
                         if size and overlapsCharacter(cf, size, LP.Character) then
-                            local urgency = math.max(0, eta) + horizon
-                            if not bestEta or urgency < bestEta then
-                                selected, selectedRoot, bestEta = threat, attacker, urgency
-                            end
+                            eta = math.max(0, candidate)
+                            threat.Evidence = "Predicted contact"
                             break
                         end
                     end
                 end
+            end
+            if eta and (not bestEta or eta < bestEta) then
+                selected, selectedRoot, bestEta = threat, attacker, eta
             end
         end
     end
@@ -3798,6 +3832,15 @@ end
 
 local itemState = {NextAttempt = 0, Dispatcher = nil, Character = nil, NextInspect = 0, ActiveUntil = 0}
 local itemDefinition
+S.DodgeTrace = {}
+local function traceDodge(reason, record)
+    local now = os.clock()
+    local previous = S.DodgeTrace[#S.DodgeTrace]
+    if previous and previous.Reason == reason and now - previous.At < .25 then return end
+    if #S.DodgeTrace >= 120 then table.remove(S.DodgeTrace, 1) end
+    S.DodgeTrace[#S.DodgeTrace + 1] = {At = now, Reason = reason,
+        Evidence = record and record.Evidence, Kind = record and record.Kind}
+end
 S.ItemRequests, S.ItemAccepted, S.ItemDodged, S.ItemMissed = 0, 0, 0, 0
 
 local function ownedDodgeItem(character)
@@ -3845,21 +3888,22 @@ local function restoreItemEquip()
     else humanoid:UnequipTools() end
 end
 
-local function itemNotify(command)
+local function itemNotify(command, payload)
     if not S.Enabled or not itemState.Pending or os.clock() - itemState.Pending.At > 2 then return end
     local now = os.clock()
+    traceDodge("Native feedback: " .. tostring(command))
     if command == "Accepted" and not itemState.Pending.Accepted then
         itemState.Pending.Accepted = true
-        itemState.ActiveUntil = now + itemDefinition.Window
+        itemState.ActiveUntil = now + (type(payload) == "number" and payload or itemDefinition.Window)
         S.ItemAccepted += 1
         restoreItemEquip()
     elseif command == "Dodged" then
         S.ItemDodged += 1
-        itemState.ActiveUntil = 0
+        itemState.ActiveUntil = now + (itemDefinition.SuccessImmunity or .9)
         itemState.NextAttempt = now + itemDefinition.SuccessCooldown
         itemState.Pending = nil
         restoreItemEquip()
-    elseif command == "Missed" then
+    elseif command == "Missed" or command == "Broken" then
         S.ItemMissed += 1
         itemState.ActiveUntil = 0
         itemState.NextAttempt = now + itemDefinition.MissCooldown
@@ -3921,9 +3965,9 @@ usableDodgeItem = function(character, now)
 end
 
 tryItemDodge = function(character, root, record, now)
-    if not record or record.Used or record.ItemAttempted then return false end
+    if not record or not ThreatPolicy.Eligible(record, now) then return false end
     local tool = usableDodgeItem(character, now)
-    if not tool then return false end
+    if not tool then traceDodge(S.ItemStatus or "Item unavailable", record); return false end
     local current = impendingThreat(root, now)
     if current ~= record then return false end
     local dispatcher = findItemDispatcher(character, now)
@@ -3935,6 +3979,7 @@ tryItemDodge = function(character, root, record, now)
         humanoid:EquipTool(tool)
         if tool.Parent ~= character then restoreItemEquip(); return false end
     end
+    record.ItemAttempts = (record.ItemAttempts or 0) + 1
     record.ItemAttempted = true
     local pending = {At = now, Tool = tool, Dispatcher = dispatcher, Quick = quick}
     itemState.Pending = pending
@@ -3942,12 +3987,17 @@ tryItemDodge = function(character, root, record, now)
     local ok, accepted = pcall(dispatcher, tool, "Begin", Enum.UserInputType.MouseButton1, quick)
     if not ok or accepted ~= true then
         itemState.Pending = nil
+        record.ItemAttempted = false
+        record.RetryAt = now + .075
+        itemState.NextAttempt = record.RetryAt
         restoreItemEquip()
         S.ItemStatus = ok and "Native hotbar declined activation" or "Native hotbar activation failed"
+        traceDodge(S.ItemStatus, record)
         return false
     end
     record.Used = true
     S.ItemRequests += 1
+    traceDodge("Native activation requested", record)
     S.ItemStatus = "Dodge item requested · waiting for native confirmation"
     local generation = S.Generation
     task.delay(.05, function()
@@ -7278,10 +7328,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r26",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r27",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r26 · Sky Fighters Dodge item only · all features OFF."
+local note="Build r27 · Sky Fighters Dodge item only · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
