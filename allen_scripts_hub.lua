@@ -4586,6 +4586,105 @@ return S
 end
 
 ]====],
+SkyPlatforms=[====[
+assert(game.GameId==8366716517,"Open Sky Fighters")
+local Run=game:GetService("RunService")
+local env=getgenv()
+local key="__ALLEN_SKY_safeplatforms"
+if env[key]then env[key]:Destroy()end
+local S={HubOnly=true,Enabled=false,Destroyed=false,Status="Off",Count=0}
+local folder,connection
+local floors={}
+local function deckFor(model)
+    local main=model:FindFirstChild("MainPlatform",true)
+    if main and main:IsA("BasePart")and main.CanCollide then return main end
+    local best,top
+    for _,p in ipairs(model:GetDescendants())do
+        if p:IsA("BasePart")and p.CanCollide and p.Size.X>=40 and p.Size.Z>=40
+            and p.CFrame.UpVector:Dot(Vector3.yAxis)>.98 then
+            local y=p.Position.Y+p.Size.Y/2
+            if not top or y>top then best,top=p,y end
+        end
+    end
+    return best
+end
+local function geometry(deck)
+    local cf,size=deck.CFrame,deck.Size
+    if cf.UpVector:Dot(Vector3.yAxis)<.98 then return end
+    local minX,minZ,maxX,maxZ=math.huge,math.huge,-math.huge,-math.huge
+    for _,x in ipairs({-.5,.5})do for _,z in ipairs({-.5,.5})do
+        local p=cf:PointToWorldSpace(Vector3.new(size.X*x,size.Y/2,size.Z*z))
+        minX,minZ=math.min(minX,p.X),math.min(minZ,p.Z)
+        maxX,maxZ=math.max(maxX,p.X),math.max(maxZ,p.Z)
+    end end
+    if maxX-minX>180 or maxZ-minZ>180 then return end
+    -- Keep the extension a tiny step below the real arena to avoid z-fighting.
+    return CFrame.new((minX+maxX)/2,deck.Position.Y+size.Y/2-.42,(minZ+maxZ)/2),
+        Vector3.new(maxX-minX+24,.6,maxZ-minZ+24)
+end
+local function refresh()
+    local map=workspace:FindFirstChild("Map")
+    local platforms=map and map:FindFirstChild("Platforms")
+    local count=0
+    local minX,minZ,maxX,maxZ,y=math.huge,math.huge,-math.huge,-math.huge,math.huge
+    if platforms then
+        for _,name in ipairs({"SquarePillar","CirclePlatform","TrianglePlatform"})do
+            local model=platforms:FindFirstChild(name)
+            local deck=model and deckFor(model)
+            local cf,size
+            if deck then cf,size=geometry(deck)end
+            if cf then
+                minX=math.min(minX,cf.X-size.X/2);maxX=math.max(maxX,cf.X+size.X/2)
+                minZ=math.min(minZ,cf.Z-size.Z/2);maxZ=math.max(maxZ,cf.Z+size.Z/2)
+                y=math.min(y,cf.Y);count+=1
+            end
+        end
+    end
+    if count==0 then
+        if floors.Arena then floors.Arena:Destroy();floors.Arena=nil end
+        S.Count=0;S.Status="Waiting for arena platforms";return
+    end
+    local p=floors.Arena
+    if not p then
+        p=Instance.new("Part");p.Name="WholeArenaStudFloor"
+        p.Anchored=true;p.CanCollide=true;p.CanTouch=false;p.CanQuery=false
+        p.CastShadow=false;p.Material=Enum.Material.Plastic
+        p.Color=Color3.fromRGB(112,126,140);p.Transparency=.45
+        p.TopSurface=Enum.SurfaceType.Studs;p.BottomSurface=Enum.SurfaceType.Smooth
+        p.CustomPhysicalProperties=PhysicalProperties.new(.7,.65,0,100,100)
+        p.Parent=folder;floors.Arena=p
+    end
+    p.Size=Vector3.new(maxX-minX,.6,maxZ-minZ)
+    p.CFrame=CFrame.new((minX+maxX)/2,y,(minZ+maxZ)/2)
+    S.Count=count;S.Status="Whole-arena stud floor active"
+
+end
+function S:SetEnabled(enabled)
+    self.Enabled=false
+    if connection then connection:Disconnect();connection=nil end
+    if folder then folder:Destroy();folder=nil end
+    table.clear(floors);self.Count=0
+    if not enabled or self.Destroyed then self.Status="Off";return end
+    folder=Instance.new("Folder");folder.Name="AllenSkySafePlatforms";folder.Parent=workspace
+    self.Enabled=true
+    local elapsed=0
+    connection=Run.Heartbeat:Connect(function(dt)
+        elapsed+=dt;if elapsed<.5 then return end;elapsed=0
+        local ok,err=pcall(refresh)
+        if not ok then self:SetEnabled(false);self.Status="Stopped · "..tostring(err)end
+    end)
+    local ok,err=pcall(refresh)
+    if not ok then self:SetEnabled(false);error(err,0)end
+end
+function S:GetSnapshot()return{Enabled=self.Enabled,Status=self.Status,Count=self.Count}end
+function S:Destroy()
+    self:SetEnabled(false);self.Destroyed=true
+    if env[key]==self then env[key]=nil end
+end
+env[key]=S
+return S
+
+]====],
 PA=[====[
 assert(game.GameId==4557322431,"Open Project: Afternight")
 local env=getgenv()
@@ -7470,10 +7569,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-05-r29",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-05-r30",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r29 · Sky Fighters local recovery + anti fall · all features OFF."
+local note="Build r30 · Sky Fighters stud walkways · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7502,6 +7601,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="sky_safeplatforms",Section="Sky Fighters",Category="Movement",Name="Safe Platforms",Subtitle="Whole-arena solid stud floor · partly transparent",Game=8366716517,Key="__ALLEN_SKY_safeplatforms",Source="SkyPlatforms"},
     {Id="sky_antistun",Section="Sky Fighters",Category="Movement",Name="Anti Stun",Subtitle="Local movement recovery · server stun still applies",Game=8366716517,Key="__ALLEN_SKY_antistun",Source="SkyProtection",Mode="antistun"},
     {Id="sky_antifall",Section="Sky Fighters",Category="Movement",Name="Anti Fall",Subtitle="Returns to recently verified safe ground",Game=8366716517,Key="__ALLEN_SKY_antifall",Source="SkyProtection",Mode="antifall"},
     {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Dodge",Subtitle="Flowstate Dodge item · native cooldowns",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
