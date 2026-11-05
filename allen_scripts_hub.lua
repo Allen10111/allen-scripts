@@ -3889,6 +3889,11 @@ local function restoreItemEquip()
 end
 
 local function itemNotify(command, payload)
+    if S.Enabled and command == "Broken" then
+        S.ItemBroken = (S.ItemBroken or 0) + 1
+        traceDodge("Flowstate stacks lost to damage")
+        return
+    end
     if not S.Enabled or not itemState.Pending or os.clock() - itemState.Pending.At > 2 then return end
     local now = os.clock()
     traceDodge("Native feedback: " .. tostring(command))
@@ -3903,7 +3908,7 @@ local function itemNotify(command, payload)
         itemState.NextAttempt = now + itemDefinition.SuccessCooldown
         itemState.Pending = nil
         restoreItemEquip()
-    elseif command == "Missed" or command == "Broken" then
+    elseif command == "Missed" then
         S.ItemMissed += 1
         itemState.ActiveUntil = 0
         itemState.NextAttempt = now + itemDefinition.MissCooldown
@@ -7328,10 +7333,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r27",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r28",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r27 · Sky Fighters Dodge item only · all features OFF."
+local note="Build r28 · Sky Fighters Dodge item only · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
