@@ -3558,8 +3558,6 @@ local function watchWarning(part)
 end
 
 local function prepareAdvancedCombat()
-    dashHandler = nativeDash()
-    assert(dashHandler, "Native Q dash interface not ready")
     local module = LP.PlayerScripts:FindFirstChild("PlayerModule")
     assert(module, "Native movement not ready")
     local controls = require(module):GetControls()
@@ -3794,16 +3792,8 @@ local function moveCombat(humanoid, root, candidates, target, now)
 end
 
 local function requestCombatDash(humanoid, root, direction, target, record, now)
-    if now < brain.NextDash or not dashReady() or not routeClear(root, direction, target, 18) then return false end
-    if not record then return false end
-    record.Used = true
-    brain.Desired = direction.Unit
-    humanoid:Move(direction.Unit, false)
-    dashHandler()
-    S.DashRequests += 1
-    brain.PendingDash = now
-    brain.NextDash = now + .3
-    return true
+    -- Auto Dash removed at user request. Manual dash remains native to the game.
+    return false
 end
 
 local itemState = {NextAttempt = 0, Dispatcher = nil, Character = nil, NextInspect = 0, ActiveUntil = 0}
@@ -3843,23 +3833,6 @@ local function findItemDispatcher(character, now)
     end
     itemState.Dispatcher, itemState.Character = found, character
     return found
-end
-
-local function fallbackDash(character, humanoid, root, record, attacker, now)
-    if not record or record.DashAttempted or not attacker or blocked(character) then return false end
-    if not dashHandler then dashHandler = nativeDash() end
-    local away = root.Position - attacker.Position
-    away = Vector3.new(away.X, 0, away.Z)
-    if away.Magnitude < .1 then away = -attacker.CFrame.LookVector end
-    local side = Vector3.new(-away.Z, 0, away.X)
-    for _, direction in ipairs({away, side, -side}) do
-        if requestCombatDash(humanoid, root, direction, attacker.Parent, record, now) then
-            record.DashAttempted = true
-            S.ItemStatus = "Dash fallback requested"
-            return true
-        end
-    end
-    return false
 end
 
 local function restoreItemEquip()
@@ -3997,17 +3970,8 @@ itemDodgeStep = function(now)
     if record then
         local active = now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"})
         if not active then
-            local pending = itemState.Pending
-            -- A confirmed item window owns defense; an unconfirmed request has a short deadline.
-            local deadline = math.max(.04, (S.PingMs or 100) / 2000)
-            local tooLate = eta and eta <= deadline
-            if pending then
-                if tooLate or now - pending.At >= deadline then
-                    fallbackDash(character, humanoid, root, record, attacker, now)
-                end
-            elseif tooLate or not tryItemDodge(character, root, record, now) then
-                fallbackDash(character, humanoid, root, record, attacker, now)
-            end
+            -- Dodge item only. Native cooldown and pending feedback still apply.
+            if not itemState.Pending then tryItemDodge(character, root, record, now) end
         end
     end
     status(S.ItemStatus or "Watching native hitbox threats")
@@ -4106,7 +4070,7 @@ local function combatStep(now)
         FreshThreat = warning and not warning.Used or threat and not threat.Used or false,
         CanItem = S.ItemDodgeEnabled and readyDodgeItem ~= nil,
         ItemWindow = now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"}),
-        CanDash = not blocked(character) and now >= brain.NextDash and dashReady(), Health = humanoid.Health / math.max(1, humanoid.MaxHealth),
+        CanDash = false, Health = humanoid.Health / math.max(1, humanoid.MaxHealth),
         NearbyEnemies = nearby, TargetRushing = rushing, Distance = flat.Magnitude, Reach = size and size.Z / 2 + 4 or 6,
         CanHit = canHit, CanPunch = tool ~= nil and tool.Parent == character and not itemState.Equip
             and not blocked(character) and not tool:GetAttribute("OnCooldown") and now >= brain.NextPunch,
@@ -4200,7 +4164,7 @@ local function defenseStep(now)
     local full = env.__ALLEN_MATCH_combat
     if full and full.Enabled then status("Full Auto Combat controls defense"); return end
     local item = env.__ALLEN_MATCH_dodgeitem
-    if item and item.Enabled then status("Auto Dodge + Dash controls defense"); return end
+    if item and item.Enabled then status("Auto Dodge controls defense"); return end
     if now >= nextScan then nextScan = now + .5; scanThreats() end
     local character = LP.Character
     local humanoid, root = live(character)
@@ -4209,29 +4173,7 @@ local function defenseStep(now)
     if not threat then status("Watching fighting-style hitboxes"); return end
     S.DefendingUntil = now + .2
     status("Incoming melee · " .. other.Parent.Name)
-    if now < nextAction or not dashHandler then return end
-    local offset = root.Position - other.Position
-    local side = Vector3.new(-offset.Z, 0, offset.X)
-    if side.Magnitude < .1 then return end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {character, other.Parent}
-    local direction = side.Unit * 5
-    if workspace:Raycast(root.Position, direction, params)
-        or not workspace:Raycast(root.Position + direction, Vector3.new(0, -10, 0), params) then return end
-    threat.Used = true
-    nextAction = now + .5
-    humanoid:MoveTo(root.Position + direction)
-    S.Moving = character
-    local generation = S.Generation
-    task.delay(.06, function()
-        if not S.Enabled or S.Generation ~= generation or LP.Character ~= character or blocked(character) then return end
-        -- Used records remain eligible for the final direction check below.
-        if other.Parent and threat.Track.IsPlaying and threatOverlaps(threat, other, character) then
-            local ok, err = pcall(dashHandler)
-            if ok then S.Actions += 1 else status("Dash error · " .. tostring(err)) end
-        end
-    end)
+
 end
 
 local qteLibrary, originalQteNew, wrappedQteNew, nativeQtePress
@@ -4380,7 +4322,6 @@ function S:SetEnabled(enabled)
     if MODE == "dodge" or MODE == "cooldown" or MODE == "combat" then
         assert(type(getconnections) == "function", "Executor needs native callback inspection")
     end
-    if MODE == "dodge" then dashHandler = nativeDash(); assert(dashHandler, "Native dash not ready") end
     if MODE == "qte" then prepareQte() end
     if MODE == "dodgeitem" then
         assert(type(getgc) == "function", "Dodge item inspection needs getgc support")
@@ -7337,10 +7278,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r25",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-04-r26",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r25 · Sky Fighters fighting-style detection · all features OFF."
+local note="Build r26 · Sky Fighters Dodge item only · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7369,9 +7310,9 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Dodge + Dash",Subtitle="Flowstate Dodge first · safe dash fallback",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
+    {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Dodge",Subtitle="Flowstate Dodge item · native cooldowns",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
-    {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings + Auto Dodge",Subtitle="Native hitboxes · all current fighting styles",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
+    {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings",Subtitle="Native hitboxes · all current fighting styles",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
     {Id="match_combat",Section="Sky Fighters",Category="Combat",Name="Full Auto Combat",Subtitle="Adaptive combat · map navigation · auto QTE · jumps",Game=8366716517,Key="__ALLEN_MATCH_combat",Source="Match",Mode="combat"},
     {Id="match_qte",Section="Sky Fighters",Category="Minigames",Name="Auto QTE",Subtitle="Native shrinking-circle prompt timing",Game=8366716517,Key="__ALLEN_MATCH_qte",Source="Match",Mode="qte"},
     {Id="match_rewards",Section="Sky Fighters",Category="Utility",Name="Auto Claim Playtime Rewards",Subtitle="Claims eligible playtime rewards",Game=8366716517,Key="__ALLEN_MATCH_rewards",Source="Match",Mode="rewards"},
