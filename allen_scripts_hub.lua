@@ -4449,6 +4449,143 @@ return S
 
 end
 ]====],
+SkyProtection=[====[
+return function(MODE)
+assert(game.GameId == 8366716517, "Open Sky Fighters")
+local Players = game:GetService("Players")
+local Run = game:GetService("RunService")
+local LP = Players.LocalPlayer
+local States = require(game.ReplicatedStorage.Modules.Gameplay.CharacterStateController)
+local Policy = (function()
+local Policy = {}
+function Policy.ShouldRescue(s)
+    if not s.Alive or s.Restricted or not s.Safe or s.SafeAge > 8 or s.SinceRescue < 1 then return false end
+    if s.Distance > 100 or s.Drop < 4 or s.VerticalSpeed > -12 then return false end
+    return s.Hazard or not s.FloorAhead
+end
+return Policy
+
+end)()
+local env = getgenv()
+local key = "__ALLEN_SKY_" .. MODE
+if env[key] then env[key]:Destroy() end
+local S = {HubOnly=true, Enabled=false, Destroyed=false, Status="Off", Actions=0}
+local connection, character, humanoid, root, safe, lastRescue = nil,nil,nil,nil,nil,-math.huge
+local normalSpeed, normalJump, normalHeight = 16,50,7.2
+local mutations = {}
+local elapsed = 0
+local function restricted(c)
+    return States.HasAny(c,{"CombatDisabled","CutsceneActive","CameraControlDisabled"})
+end
+local function change(object, property, value)
+    local saved=mutations[object]
+    if not saved then saved={};mutations[object]=saved end
+    if not saved[property] then saved[property]={Before=object[property]} end
+    object[property]=value;saved[property].Written=value
+end
+local function restore()
+    for object, properties in pairs(mutations) do
+        if object.Parent then
+            for property, saved in pairs(properties) do
+                if object[property] == saved.Written then object[property]=saved.Before end
+            end
+        end
+    end
+    table.clear(mutations)
+end
+local function bind()
+    if LP.Character~=character then
+        restore();character=LP.Character;safe=nil
+        humanoid=character and character:FindFirstChildOfClass("Humanoid")
+        root=character and character:FindFirstChild("HumanoidRootPart")
+        if humanoid then
+            normalSpeed=humanoid.WalkSpeed>0 and humanoid.WalkSpeed or 16
+            normalJump=humanoid.JumpPower>0 and humanoid.JumpPower or 50
+            normalHeight=humanoid.JumpHeight>0 and humanoid.JumpHeight or 7.2
+        end
+    end
+    if character then
+        humanoid=character:FindFirstChildOfClass("Humanoid")
+        root=character:FindFirstChild("HumanoidRootPart")
+    end
+    return humanoid and root and humanoid.Health>0 and character.Parent
+end
+local function antiStun()
+    if restricted(character) then S.Status="Waiting for round / cutscene";return end
+    local stunned=States.HasAny(character,{"Stunned","Immobilized"})
+    local ragdolled=States.HasAny(character,{"Ragdolled"})
+    if ragdolled then S.Status="Server ragdoll active · recovery pending";return end
+    if stunned then
+        if humanoid.WalkSpeed<normalSpeed then change(humanoid,"WalkSpeed",normalSpeed) end
+        if humanoid.UseJumpPower and humanoid.JumpPower<normalJump then change(humanoid,"JumpPower",normalJump)
+        elseif not humanoid.UseJumpPower and humanoid.JumpHeight<normalHeight then change(humanoid,"JumpHeight",normalHeight) end
+        S.Status="Local movement recovery · server stun still applies"
+    else
+        -- Do not restore a stale zero-speed snapshot after native stun expires.
+        table.clear(mutations)
+        if humanoid.WalkSpeed>0 then normalSpeed=humanoid.WalkSpeed end
+        if humanoid.JumpPower>0 then normalJump=humanoid.JumpPower end
+        if humanoid.JumpHeight>0 then normalHeight=humanoid.JumpHeight end
+        S.Status="Watching stun recovery"
+    end
+end
+local function antiFall(now)
+    if restricted(character) then safe=nil;S.Status="Waiting for round / cutscene";return end
+    local exclude={character}
+    for _,p in ipairs(Players:GetPlayers()) do if p.Character then exclude[#exclude+1]=p.Character end end
+    local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances=exclude;params.RespectCanCollide=true
+    local hit=workspace:Raycast(root.Position,Vector3.new(0,-18,0),params)
+    local function hazard(part)return part and (part.Name=="FallPart" or part.Name=="FallKillPart")end
+    local grounded=hit and hit.Normal.Y>.65 and not hazard(hit.Instance)
+        and (root.Position-hit.Position).Magnitude<=humanoid.HipHeight+4
+        and math.abs(root.AssemblyLinearVelocity.Y)<8
+        and not States.HasAny(character,{"Ragdolled","Stunned"})
+    if grounded then
+        safe={Part=hit.Instance,Relative=hit.Instance.CFrame:ToObjectSpace(root.CFrame),At=now}
+    end
+    if safe and (not safe.Part.Parent or not safe.Part.CanCollide) then safe=nil end
+    if not safe then S.Status="Waiting for safe ground";return end
+    local destination=safe.Part.CFrame*safe.Relative
+    local predicted=root.Position+root.AssemblyLinearVelocity*.15
+    local ahead=workspace:Raycast(predicted,Vector3.new(0,-18,0),params)
+    if Policy.ShouldRescue({Alive=true,Restricted=false,Safe=true,SafeAge=now-safe.At,
+        SinceRescue=now-lastRescue,Distance=(root.Position-destination.Position).Magnitude,
+        Drop=destination.Position.Y-root.Position.Y,VerticalSpeed=root.AssemblyLinearVelocity.Y,
+        Hazard=hit and hazard(hit.Instance) or ahead and hazard(ahead.Instance),
+        FloorAhead=ahead and not hazard(ahead.Instance) and ahead.Normal.Y>.6}) then
+        -- Return only to verified ground; never dash or activate a power.
+        root.AssemblyLinearVelocity=Vector3.zero;root.AssemblyAngularVelocity=Vector3.zero
+        character:PivotTo(destination*root.CFrame:Inverse()*character:GetPivot())
+        lastRescue=now;S.Actions+=1;S.Status="Returned to last safe surface"
+    else S.Status="Safe surface recorded" end
+end
+function S:SetEnabled(enabled)
+    self.Enabled=false
+    if connection then connection:Disconnect();connection=nil end
+    restore();safe=nil;character=nil
+    if not enabled or self.Destroyed then self.Status="Off";return end
+    assert(MODE=="antistun" or MODE=="antifall","Unknown protection")
+    self.Enabled=true;self.Status="Starting"
+    connection=Run.Heartbeat:Connect(function(dt)
+        elapsed+=dt;if elapsed<1/30 then return end;elapsed=0
+        local ok,err=pcall(function()
+            if not bind() then safe=nil;self.Status="Waiting for character";return end
+            if MODE=="antistun" then antiStun() else antiFall(os.clock()) end
+        end)
+        if not ok then self:SetEnabled(false);self.Status="Stopped · "..tostring(err) end
+    end)
+end
+function S:GetSnapshot()return {Enabled=self.Enabled,Status=self.Status,Actions=self.Actions}end
+function S:Destroy()
+    self:SetEnabled(false);self.Destroyed=true
+    if env[key]==self then env[key]=nil end
+end
+env[key]=S
+return S
+end
+
+]====],
 PA=[====[
 assert(game.GameId==4557322431,"Open Project: Afternight")
 local env=getgenv()
@@ -7333,10 +7470,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-04-r28",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-05-r29",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r28 · Sky Fighters Dodge item only · all features OFF."
+local note="Build r29 · Sky Fighters local recovery + anti fall · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -7365,6 +7502,8 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="sky_antistun",Section="Sky Fighters",Category="Movement",Name="Anti Stun",Subtitle="Local movement recovery · server stun still applies",Game=8366716517,Key="__ALLEN_SKY_antistun",Source="SkyProtection",Mode="antistun"},
+    {Id="sky_antifall",Section="Sky Fighters",Category="Movement",Name="Anti Fall",Subtitle="Returns to recently verified safe ground",Game=8366716517,Key="__ALLEN_SKY_antifall",Source="SkyProtection",Mode="antifall"},
     {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Dodge",Subtitle="Flowstate Dodge item · native cooldowns",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
     {Id="match_esp",Section="Sky Fighters",Category="Alerts",Name="Player ESP",Subtitle="Player highlights",Game=8366716517,Key="__ALLEN_MATCH_esp",Source="Match",Mode="esp"},
     {Id="match_dodge",Section="Sky Fighters",Category="Combat",Name="Attack Warnings",Subtitle="Native hitboxes · all current fighting styles",Game=8366716517,Key="__ALLEN_MATCH_dodge",Source="Match",Mode="dodge"},
