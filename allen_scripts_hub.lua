@@ -2105,6 +2105,23 @@ local attacks = {
     ["94215646393565"] = {35, 0.95}, -- knife throw
 }
 
+local animationNames = {
+    ["116839849594540"] = "FistsSwing1",
+    ["96924216250322"] = "FistsSwing2",
+    ["123072675259257"] = "FistsSwing1Lunge",
+    ["85793691404836"] = "ForkSwing1",
+    ["86197206792061"] = "ForkSwing2",
+    ["85623602463927"] = "BottleSwing1",
+    ["87978085217719"] = "BottleSwing2",
+    ["99157505926076"] = "Fork/Bottle Lunge",
+    ["79649041083405"] = "KnifeSwing1",
+    ["73242877658272"] = "KnifeSwing2",
+    ["130148105259587"] = "KnifeSwing1Lunge",
+    ["121147456137931"] = "KnifeSwingBackstab",
+    ["72557176302052"] = "Fork Throw",
+    ["73150160715773"] = "Bottle Throw",
+    ["94215646393565"] = "Knife Throw",
+}
 local folderAttacks = {}
 local fightBackProfiles = {
     Punch1 = {14, 0.65},
@@ -2130,6 +2147,7 @@ local function indexAttackFolders()
                     local id = object.AnimationId:match("%d+")
                     if id then
                         folderAttacks[id] = attacks[id] or fightBackProfiles[object.Name] or closeRange
+                        animationNames[id] = object.Name
                         count += 1
                     end
                 end
@@ -2141,6 +2159,7 @@ end
 
 local state = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off"}
 local watchers = {}
+local pendingSwings = {}
 local recentThreats = setmetatable({}, {__mode = "k"})
 local connections = {}
 
@@ -2283,15 +2302,17 @@ local function dashAway(enemyRoot, character, humanoid, root, track, animationId
         end
         local registered = character:GetAttribute("RecentDash") ~= before
         state.Status = registered and "Dash registered" or "Native dash did not register"
-        print("[Weapon Auto Dodge]", state.Status, "animation", animationId, "phase", phase, "health", health, humanoid.Health, "direction", direction)
+        print("[Weapon Auto Dodge]", state.Status, "animation", animationNames[animationId] or track.Name, animationId, "phase", phase, "health", health, humanoid.Health, "direction", direction)
     end)
 end
 
-local function observe(character, track)
+local function observe(character, track, deadline)
     local animation = track.Animation
     local animationId = animation and animation.AnimationId:match("%d+")
     local attack = animationId and (folderAttacks[animationId] or attacks[animationId])
+    if not deadline then pendingSwings[track] = nil end
     if not attack then return end
+    if deadline and (os.clock() >= deadline or not track.IsPlaying) then return end
     local target = player.Character
     if not state.Enabled or not target then return end
     local live = workspace:FindFirstChild("Live")
@@ -2301,12 +2322,20 @@ local function observe(character, track)
     local enemyRoot = character:FindFirstChild("HumanoidRootPart")
     if not humanoid or humanoid.Health <= 0 or not root or not enemyRoot then return end
 
+    local function keepWatching()
+        if deadline then return true end
+        -- A swing can start out of range and close during its windup.
+        if attack[3] and (root.Position - enemyRoot.Position).Magnitude <= attack[1] + 14 then
+            pendingSwings[track] = {Character = character, Deadline = os.clock() + 0.15}
+        end
+    end
+
     local delta = root.Position - enemyRoot.Position
     local horizontal = flat(delta)
     local facing = flat(enemyRoot.CFrame.LookVector)
     local distance = horizontal.Magnitude
     if math.abs(delta.Y) > 5 or distance < 0.1 or facing.Magnitude < 0.01
-        or facing.Unit:Dot(horizontal.Unit) < attack[2] then return end
+        or facing.Unit:Dot(horizontal.Unit) < attack[2] then return keepWatching() end
 
     local windupLead = attack[3] and math.max(0, 0.1 - track.TimePosition) or 0
     local lead = math.clamp(ping + frameTime + windupLead, 0, 0.18)
@@ -2331,7 +2360,7 @@ local function observe(character, track)
             return depth >= -bodyRadius and depth <= length and math.abs(point:Dot(right)) <= halfWidth
         end
 
-        if not overlaps(horizontal) and not overlaps(horizontal - motion) then return end
+        if not overlaps(horizontal) and not overlaps(horizontal - motion) then return keepWatching() end
     elseif distance > attack[1] then
         if relativeVelocity:Dot(horizontal.Unit) <= 0
             or (horizontal - motion).Magnitude > attack[1] then return end
@@ -2391,7 +2420,12 @@ function state:SetEnabled(value)
     if value then
         self.IndexedAnimations = indexAttackFolders()
         nextPingSample = 0
-        connections.timing = RunService.Heartbeat:Connect(sampleTiming)
+        connections.timing = RunService.Heartbeat:Connect(function(dt)
+            sampleTiming(dt)
+            for track, swing in pairs(pendingSwings) do
+                if not observe(swing.Character, track, swing.Deadline) then pendingSwings[track] = nil end
+            end
+        end)
         connections.added = Players.PlayerAdded:Connect(watch)
         connections.removing = Players.PlayerRemoving:Connect(unwatch)
         for _, other in ipairs(Players:GetPlayers()) do watch(other) end
@@ -2399,6 +2433,7 @@ function state:SetEnabled(value)
         for _, connection in pairs(connections) do connection:Disconnect() end
         table.clear(connections)
         table.clear(recentThreats)
+        table.clear(pendingSwings)
         for other in pairs(watchers) do unwatch(other) end
     end
 end
@@ -7946,10 +7981,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r33",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r34",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r33 · Ink Game dodge direction and timing · all features OFF."
+local note="Build r34 · Ink Game melee windup tracking · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
