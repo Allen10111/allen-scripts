@@ -2141,6 +2141,7 @@ end
 
 local state = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off"}
 local watchers = {}
+local recentThreats = setmetatable({}, {__mode = "k"})
 local connections = {}
 
 local cachedInfo
@@ -2207,7 +2208,7 @@ local function flat(vector)
     return Vector3.new(vector.X, 0, vector.Z)
 end
 
-local function dashAway(enemyRoot, character, humanoid, root)
+local function dashAway(enemyRoot, character, humanoid, root, track, animationId)
     if os.clock() < nextDispatch then return end
     local boosts = player:FindFirstChild("Boosts")
     local sprint = boosts and boosts:FindFirstChild("Faster Sprint")
@@ -2233,11 +2234,20 @@ local function dashAway(enemyRoot, character, humanoid, root)
     ray.FilterType = Enum.RaycastFilterType.Exclude
     ray.FilterDescendantsInstances = {character, enemyRoot.Parent}
     ray.RespectCanCollide = true
-    local direction, bestDot = nil, 0
+    local direction, bestScore = nil, -math.huge
+    local now = os.clock()
     for _, candidate in ipairs({forward, -forward, right, -right}) do
         local dot = away:Dot(candidate)
-        if dot > bestDot and not workspace:Raycast(root.Position, candidate * 20, ray) then
-            direction, bestDot = candidate, dot
+        if dot >= -0.01 and not workspace:Raycast(root.Position, candidate * 20, ray) then
+            local landing = root.Position + candidate * 20
+            local nearest = 30
+            for threat, seenAt in pairs(recentThreats) do
+                if now - seenAt <= 0.55 and threat:IsDescendantOf(workspace) then
+                    nearest = math.min(nearest, flat(landing - threat.Position).Magnitude)
+                end
+            end
+            local score = nearest + dot * 4
+            if score > bestScore then direction, bestScore = candidate, score end
         end
     end
     if not direction then return end
@@ -2253,6 +2263,7 @@ local function dashAway(enemyRoot, character, humanoid, root)
     nextDispatch = os.clock() + 1.5
     local previous = shared.controllerpressed
     local before = character:GetAttribute("RecentDash")
+    local phase, health = track.TimePosition, humanoid.Health
     shared.controllerpressed = true
     local ok, message = pcall(function()
         humanoid:Move(direction, false)
@@ -2272,7 +2283,7 @@ local function dashAway(enemyRoot, character, humanoid, root)
         end
         local registered = character:GetAttribute("RecentDash") ~= before
         state.Status = registered and "Dash registered" or "Native dash did not register"
-        print("[Weapon Auto Dodge]", state.Status, "direction", direction)
+        print("[Weapon Auto Dodge]", state.Status, "animation", animationId, "phase", phase, "health", health, humanoid.Health, "direction", direction)
     end)
 end
 
@@ -2297,7 +2308,8 @@ local function observe(character, track)
     if math.abs(delta.Y) > 5 or distance < 0.1 or facing.Magnitude < 0.01
         or facing.Unit:Dot(horizontal.Unit) < attack[2] then return end
 
-    local lead = math.clamp(ping + frameTime, 0, 0.12)
+    local windupLead = attack[3] and math.max(0, 0.1 - track.TimePosition) or 0
+    local lead = math.clamp(ping + frameTime + windupLead, 0, 0.18)
     local relativeVelocity = flat(enemyRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity)
     local motion = relativeVelocity * lead
     if motion.Magnitude > 6 then motion = motion.Unit * 6 end
@@ -2324,7 +2336,8 @@ local function observe(character, track)
         if relativeVelocity:Dot(horizontal.Unit) <= 0
             or (horizontal - motion).Magnitude > attack[1] then return end
     end
-    dashAway(enemyRoot, target, humanoid, root)
+    recentThreats[enemyRoot] = os.clock()
+    dashAway(enemyRoot, target, humanoid, root, track, animationId)
 end
 
 local function unwatch(other)
@@ -2385,6 +2398,7 @@ function state:SetEnabled(value)
     else
         for _, connection in pairs(connections) do connection:Disconnect() end
         table.clear(connections)
+        table.clear(recentThreats)
         for other in pairs(watchers) do unwatch(other) end
     end
 end
@@ -7932,10 +7946,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r32",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r33",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r32 · Ink Game Weapon Auto Dodge and Unlock Dash · all features OFF."
+local note="Build r33 · Ink Game dodge direction and timing · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
