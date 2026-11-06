@@ -1,5 +1,5 @@
 -- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC)
--- F1 toggles the system. It starts OFF.
+-- The Allen Scripts hub controls this engine. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
 --
@@ -30,9 +30,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
--- Hub switch replaces the PC keyboard gate on touch devices.
-assert(type(getconnections)=="function" and debug and type(debug.getupvalues)=="function",
-    "Auto Dodge requires getconnections and debug.getupvalues; this executor is missing those APIs")
+if not UserInputService.KeyboardEnabled then
+    warn("[Ink Auto Dodge] PC keyboard version only")
+    return
+end
 
 local LocalPlayer = Players.LocalPlayer
 local Values = workspace:WaitForChild("Values", 10)
@@ -156,8 +157,6 @@ local State = {
     Initializing = false,
     Destroyed = false,
     Generation = 0,
-    ToggleKey = Enum.KeyCode.F1,
-    GuiVisible = true,
     PhantomStepPower = "PHANTOM STEP",
     PhantomStepDuration = 0.05,
     PhantomStepDirectionScale = 7,
@@ -1077,14 +1076,6 @@ local function nativeDashAvailable(character, humanoid)
 
     local ready, reason, remaining, source = State:NativeNormalCooldown(character, os.clock())
     return ready, reason, remaining, 0, 0, source
-end
-
-local StatusGui={Enabled=false,Destroy=function()end}
-local ToggleButton={Parent=true}
-local function updateStatus(force) end
-function State:GetSnapshot()
-    return {Enabled=self.Enabled,Status=self.Enabled and (self.LastBlockReason or "Watching attacks") or "Off",
-        Errors=self.ErrorCount or 0}
 end
 
 local function reportError(context, message)
@@ -7259,7 +7250,6 @@ local function confirmDodgeAttempt(now)
         if directionVerified then
             retireCoveredThreats(now, attempt.Threat)
         end
-        updateStatus(true)
     elseif now >= attempt.ExpiresAt then
         if attempt.Telemetry then
             attempt.Telemetry.Rejected = true
@@ -10870,7 +10860,6 @@ local function nativeDodge(threat, suppliedPlan)
             Threat = threat.Profile and threat.Profile.Name or "Unknown",
             Reason = State.LastTerrainStatus,
         })
-        updateStatus(false)
         return false, "terrain_rejected"
     end
     local minimumRequestInterval = math.max(MIN_REQUEST_INTERVAL, State.FrameMean)
@@ -11722,7 +11711,6 @@ local function processFrame(deltaTime, generation)
         work,
         State.DecayingWorstWork * math.exp(-1.5 * math.max(deltaTime, 0.001))
     )
-    updateStatus(false)
     State.ConsecutiveErrors = 0
 end
 
@@ -12160,7 +12148,6 @@ queueAttack = function(attackerCharacter, track, generation, forceDashRetry)
     })
     evaluateImmediately(threat, now, false)
     dodgeMostUrgentNow(now)
-    updateStatus(false)
 end
 
 function State:RunSelfTest()
@@ -13455,7 +13442,6 @@ function State:SetEnabled(enabled)
             reportError("activation", message)
         end
     end
-    updateStatus(true)
 end
 
 function State:Destroy()
@@ -13467,9 +13453,6 @@ function State:Destroy()
     self.Enabled = false
     stopActiveWork()
     clearConnections(self.LifetimeConnections)
-    if StatusGui then
-        StatusGui:Destroy()
-    end
     self.Profiles = nil
     self.DashIds = nil
     self:ClearDashControllerCache()
@@ -13489,6 +13472,5 @@ function State:Destroy()
     end
 end
 
-State.HubOnly=true
-updateStatus(true)
+State.HubOnly = true
 return State
