@@ -264,6 +264,17 @@ local function dashAway(enemyRoot, character, humanoid, root, track, animationId
     end)
 end
 
+local function dashBlockedByRecovery(character)
+    if character:FindFirstChild("Ragdoll") or character:FindFirstChild("Dead") then return true end
+    for _, child in ipairs(character:GetChildren()) do
+        if child.Name == "Stun" and not (child:GetAttribute("GettingShot") or child:GetAttribute("CanFireGun")
+            or child:GetAttribute("FakeStun") or child:GetAttribute("CanDash")) then
+            return true
+        end
+    end
+    return false
+end
+
 local function observe(character, track, deadline)
     local animation = track.Animation
     local animationId = animation and animation.AnimationId:match("%d+")
@@ -334,6 +345,10 @@ local function observe(character, track, deadline)
             or (horizontal - motion).Magnitude > attack[1] then return end
     end
     recentThreats[enemyRoot] = os.clock()
+    if dashBlockedByRecovery(target) then
+        state.Status = "Waiting for ragdoll or stun to clear"
+        return keepWatching()
+    end
     dashAway(enemyRoot, target, humanoid, root, track, animationId)
 end
 
