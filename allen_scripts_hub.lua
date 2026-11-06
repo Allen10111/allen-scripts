@@ -2160,6 +2160,9 @@ end
 local state = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off"}
 local watchers = {}
 local pendingSwings = {}
+local approach = setmetatable({}, {__mode = "k"})
+local sampledTarget
+local nextMotionSample = 0
 local recentThreats = setmetatable({}, {__mode = "k"})
 local connections = {}
 
@@ -2225,6 +2228,39 @@ end
 
 local function flat(vector)
     return Vector3.new(vector.X, 0, vector.Z)
+end
+
+local function sampleApproach()
+    local now = os.clock()
+    if now < nextMotionSample then return end
+    nextMotionSample = now + 0.033
+    local target = player.Character
+    if sampledTarget ~= target then
+        table.clear(approach)
+        sampledTarget = target
+    end
+    local root = target and target:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    for opponent in pairs(watchers) do
+        local character = opponent.Character
+        local enemy = character and character:FindFirstChild("HumanoidRootPart")
+        if enemy then
+            local offset = flat(root.Position - enemy.Position)
+            if offset.Magnitude > 0.1 and offset.Magnitude <= 38 then
+                local enemyVelocity = flat(enemy.AssemblyLinearVelocity)
+                local velocity = enemyVelocity - flat(root.AssemblyLinearVelocity)
+                local closing = velocity:Dot(offset.Unit)
+                if closing >= 24 and enemyVelocity:Dot(offset.Unit) >= 24 then
+                    approach[enemy] = {Velocity = velocity, At = now}
+                elseif closing < -4 then
+                    approach[enemy] = nil
+                end
+            else
+                approach[enemy] = nil
+            end
+        end
+    end
 end
 
 local function dashAway(enemyRoot, character, humanoid, root, track, animationId)
@@ -2340,6 +2376,16 @@ local function observe(character, track, deadline)
     local windupLead = attack[3] and math.max(0, 0.1 - track.TimePosition) or 0
     local lead = math.clamp(ping + frameTime + windupLead, 0, 0.18)
     local relativeVelocity = flat(enemyRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity)
+    local recent = approach[enemyRoot]
+    if attack[3] and recent and sampledTarget == target and os.clock() - recent.At <= 0.16 then
+        local axis = horizontal.Unit
+        local closing = relativeVelocity:Dot(axis)
+        local recentClosing = recent.Velocity:Dot(axis)
+        if closing >= -4 and recentClosing > closing then
+            -- Carry only the closing component, so old sideways motion cannot aim the prediction.
+            relativeVelocity += axis * ((recentClosing - closing) * 0.65)
+        end
+    end
     local motion = relativeVelocity * lead
     if motion.Magnitude > 6 then motion = motion.Unit * 6 end
 
@@ -2422,6 +2468,7 @@ function state:SetEnabled(value)
         nextPingSample = 0
         connections.timing = RunService.Heartbeat:Connect(function(dt)
             sampleTiming(dt)
+            sampleApproach()
             for track, swing in pairs(pendingSwings) do
                 if not observe(swing.Character, track, swing.Deadline) then pendingSwings[track] = nil end
             end
@@ -2434,6 +2481,7 @@ function state:SetEnabled(value)
         table.clear(connections)
         table.clear(recentThreats)
         table.clear(pendingSwings)
+        table.clear(approach)
         for other in pairs(watchers) do unwatch(other) end
     end
 end
@@ -7981,10 +8029,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r34",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r35",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r34 · Ink Game melee windup tracking · all features OFF."
+local note="Build r35 · Ink Game dash-in attack tracking · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
