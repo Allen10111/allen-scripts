@@ -45,6 +45,13 @@ local animationNames = {
     ["94215646393565"] = "Knife Throw",
 }
 local folderAttacks = {}
+local dashIds = {
+    ["134552572582241"] = "Forward",
+    ["98397849734585"] = "Backwards",
+    ["88725936982152"] = "Left",
+    ["104349024070999"] = "Right",
+}
+local enemyDashes = setmetatable({}, {__mode = "k"})
 local fightBackProfiles = {
     Punch1 = {14, 0.65},
     Punch2 = {14, 0.65},
@@ -60,6 +67,14 @@ local function indexAttackFolders()
     table.clear(folderAttacks)
     local animations = game:GetService("ReplicatedStorage"):FindFirstChild("Animations")
     local abilities = animations and animations:FindFirstChild("Abilities")
+    local dashing = animations and animations:FindFirstChild("Dashing")
+    if dashing then
+        for _, name in ipairs({"Forward", "Backwards", "Left", "Right"}) do
+            local animation = dashing:FindFirstChild(name)
+            local id = animation and animation:IsA("Animation") and animation.AnimationId:match("%d+")
+            if id then dashIds[id] = name end
+        end
+    end
     local count = 0
     for _, name in ipairs({"FightBack", "Fists"}) do
         local folder = abilities and abilities:FindFirstChild(name)
@@ -159,6 +174,7 @@ local function sampleApproach()
     local target = player.Character
     if sampledTarget ~= target then
         table.clear(approach)
+        table.clear(enemyDashes)
         sampledTarget = target
     end
     local root = target and target:FindFirstChild("HumanoidRootPart")
@@ -275,9 +291,33 @@ local function dashBlockedByRecovery(character)
     return false
 end
 
+local function rememberDash(character, direction)
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local frame = root.CFrame
+    local vector = direction == "Backwards" and -frame.LookVector
+        or direction == "Left" and -frame.RightVector
+        or direction == "Right" and frame.RightVector
+        or frame.LookVector
+    vector = flat(vector)
+    if vector.Magnitude > 0.01 then
+        enemyDashes[character] = {Direction = vector.Unit, Expires = os.clock() + 0.12}
+    end
+end
+
 local function observe(character, track, deadline)
     local animation = track.Animation
     local animationId = animation and animation.AnimationId:match("%d+")
+    local dashDirection = animationId and dashIds[animationId]
+    if dashDirection and not deadline and state.Enabled then
+        rememberDash(character, dashDirection)
+        for pendingTrack, swing in pairs(pendingSwings) do
+            if swing.Character == character and not observe(character, pendingTrack, swing.Deadline) then
+                pendingSwings[pendingTrack] = nil
+            end
+        end
+        return
+    end
     local attack = animationId and (folderAttacks[animationId] or attacks[animationId])
     if not deadline then pendingSwings[track] = nil end
     if not attack then return end
@@ -317,6 +357,15 @@ local function observe(character, track, deadline)
         if closing >= -4 and recentClosing > closing then
             -- Carry only the closing component, so old sideways motion cannot aim the prediction.
             relativeVelocity += axis * ((recentClosing - closing) * 0.65)
+        end
+    end
+    local dash = enemyDashes[character]
+    if attack[3] and dash and os.clock() < dash.Expires then
+        local axis = horizontal.Unit
+        local closing = relativeVelocity:Dot(axis)
+        local dashClosing = dash.Direction:Dot(axis)
+        if dashClosing >= 0.75 and closing >= -4 then
+            relativeVelocity += axis * math.max(0, 48 * dashClosing - closing)
         end
     end
     local motion = relativeVelocity * lead
@@ -419,6 +468,7 @@ function state:SetEnabled(value)
         table.clear(recentThreats)
         table.clear(pendingSwings)
         table.clear(approach)
+        table.clear(enemyDashes)
         for other in pairs(watchers) do unwatch(other) end
     end
 end
