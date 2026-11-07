@@ -8,6 +8,43 @@ local storage = game:GetService("ReplicatedStorage")
 local emitter = require(storage.Game.ItemSystem.BulletEmitter)
 local state = {HubOnly = true, Enabled = false, Destroyed = false}
 local original, wrapper
+local env = getgenv()
+local input = game:GetService("UserInputService")
+local run = game:GetService("RunService")
+local overlay, ring, draw
+
+local function radius()
+    return math.clamp(tonumber(env.__ALLEN_SILENT_AIM_RADIUS) or 150, 50, 350)
+end
+
+local function drawFov()
+    local size = radius() * 2
+    local center = input:GetMouseLocation()
+    ring.Size = UDim2.fromOffset(size, size)
+    ring.Position = UDim2.fromOffset(center.X, center.Y)
+end
+
+local function showFov()
+    overlay = Instance.new("ScreenGui")
+    overlay.Name = "AllenSilentAimFov"
+    overlay.ResetOnSpawn = false
+    overlay.IgnoreGuiInset = true
+    overlay.DisplayOrder = 1000000
+    ring = Instance.new("Frame")
+    ring.AnchorPoint = Vector2.new(0.5, 0.5)
+    ring.BackgroundTransparency = 1
+    ring.Parent = overlay
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = ring
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(235, 235, 235)
+    stroke.Transparency = 0.25
+    stroke.Parent = ring
+    drawFov()
+    overlay.Parent = player:FindFirstChildOfClass("PlayerGui")
+    draw = run.RenderStepped:Connect(drawFov)
+end
 
 local function targetDirection(origin, direction)
     local team = player.Team and player.Team.Name
@@ -17,8 +54,10 @@ local function targetDirection(origin, direction)
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = player.Character and {player.Character} or {}
     params.IgnoreWater = true
-    local best, bestDot = nil, math.cos(math.rad(12))
-    local forward = direction.Unit
+    local camera = workspace.CurrentCamera
+    if not camera then return nil end
+    local center = input:GetMouseLocation()
+    local best, bestDistance = nil, radius()
     for _, candidate in ipairs(Players:GetPlayers()) do
         if candidate ~= player and candidate.Team and candidate.Team.Name == enemyTeam then
             local character = candidate.Character
@@ -27,11 +66,12 @@ local function targetDirection(origin, direction)
             if humanoid and humanoid.Health > 0 and root then
                 local delta = root.Position - origin
                 if delta.Magnitude > 0.01 and delta.Magnitude <= 450 then
-                    local dot = forward:Dot(delta.Unit)
-                    if dot > bestDot then
+                    local point, onScreen = camera:WorldToViewportPoint(root.Position)
+                    local distance = (Vector2.new(point.X, point.Y) - center).Magnitude
+                    if onScreen and distance <= bestDistance then
                         local hit = workspace:Raycast(origin, delta, params)
                         if not hit or hit.Instance:IsDescendantOf(character) then
-                            best, bestDot = delta.Unit * direction.Magnitude, dot
+                            best, bestDistance = delta.Unit * direction.Magnitude, distance
                         end
                     end
                 end
@@ -54,9 +94,12 @@ function state:SetEnabled(enabled)
             end
             return nextEmit(selfEmitter, origin, direction, ...)
         end
+        showFov()
         emitter.Emit = wrapper
-    elseif emitter.Emit == wrapper then
-        emitter.Emit = original
+    else
+        if emitter.Emit == wrapper then emitter.Emit = original end
+        if draw then draw:Disconnect(); draw = nil end
+        if overlay then overlay:Destroy(); overlay = nil; ring = nil end
     end
     self.Enabled = enabled
 end
@@ -20618,10 +20661,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r46",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r47",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r46 · Jailbreak Silent Aim · all features OFF."
+local note="Build r47 · Adjustable Jailbreak Silent Aim FOV · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -20923,6 +20966,18 @@ for index,feature in ipairs(features)do
     knob:FindFirstChildOfClass("UICorner").CornerRadius=UDim.new(1,0)
     local caption=label(card,"OFF",9);caption.TextXAlignment=Enum.TextXAlignment.Center;caption.TextColor3=C.Muted
     hub.Rows[#hub.Rows+1]={Feature=feature,Card=card,Title=name,Description=desc,State=state,Toggle=toggle,Knob=knob,Label=caption}
+    if feature.Id=="silentaim" and game.GameId==feature.Game then
+        local row=hub.Rows[#hub.Rows]
+        row.FovLess=button(card,"−")
+        row.FovMore=button(card,"+")
+        row.FovValue=label(card,"",11)
+        local function adjust(amount)
+            env.__ALLEN_SILENT_AIM_RADIUS=math.clamp((env.__ALLEN_SILENT_AIM_RADIUS or 150)+amount,50,350)
+            render()
+        end
+        connect(row.FovLess.Activated,function()adjust(-25)end)
+        connect(row.FovMore.Activated,function()adjust(25)end)
+    end
     connect(toggle.Activated,function()change(feature);render()end)
 end
 render=function()
@@ -20941,6 +20996,7 @@ render=function()
         row.Knob.Position=UDim2.fromOffset(q.Enabled and row.OnX or 4,4)
         row.Label.Text=busy and "…" or unavailable and "N/A" or q.Enabled and "ON" or "OFF"
         row.Toggle.Active=not unavailable and not busy
+        if row.FovValue then row.FovValue.Text="FOV  "..tostring(env.__ALLEN_SILENT_AIM_RADIUS or 150).." px" end
         row.State.Text=busy and "Loading…" or (q.Status or "Off")..(q.Hits and " · "..q.Hits.." hits" or "")
     end
     for name,b in pairs(sectionButtons)do
@@ -21008,11 +21064,16 @@ layout=function()
     else footer.TextSize=10 end
     local cw=pw-30
     for _,row in ipairs(hub.Rows)do
-        local rh=compact and 110 or 104
+        local rh=(compact and 110 or 104)+(row.FovValue and 38 or 0)
         row.Card.Size=UDim2.new(1,-6,0,rh)
         place(row.Title,14,9,cw-88,compact and 34 or 34);row.Title.TextSize=compact and 14 or 16
         place(row.Description,14,compact and 45 or 44,cw-90,compact and 30 or 30);row.Description.TextSize=compact and 11 or 12
         place(row.State,14,rh-23,cw-28,16)
+        if row.FovValue then
+            place(row.FovLess,14,rh-61,32,28)
+            place(row.FovValue,54,rh-61,85,28)
+            place(row.FovMore,142,rh-61,32,28)
+        end
         local sw,sh=compact and 56 or 48,compact and 44 or 28
         place(row.Toggle,cw-sw-12,compact and 43 or 40,sw,sh);place(row.Label,cw-sw-12,17,sw,15)
         row.Knob.Size=UDim2.fromOffset(sh-8,sh-8);row.OnX=sw-sh+4
