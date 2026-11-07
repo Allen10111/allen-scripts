@@ -1536,223 +1536,6 @@ end
 return S
 
 ]====],
-Camera=[====[
--- Soft Camera Lock (Shift Lock compensated)
--- Press C to lock / unlock
-
-local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local LP = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
-local Mouse = LP:GetMouse()
-
-local LockedPlayer = nil
-local LockedCharacter = nil
-local Highlight = nil
-local FollowConnection = nil
-
-local LOCK_STRENGTH = 0.78
-local MAX_LOCK_ANGLE = 40
-
--- How much to pull the aim point to correct Shift Lock offset
--- Higher value = moves crosshair more toward center of torso
-local SHIFTLOCK_COMPENSATION = 0.55
-
-local function clearTarget()
-    if Highlight then Highlight:Destroy(); Highlight = nil end
-    LockedPlayer, LockedCharacter = nil, nil
-end
-
-local function createHighlight(character)
-	if Highlight then Highlight:Destroy() end
-	local hl = Instance.new("Highlight")
-	hl.Name = "TargetLock"
-	hl.FillColor = Color3.fromRGB(255, 0, 0)
-	hl.OutlineColor = Color3.fromRGB(255, 40, 40)
-	hl.FillTransparency = 0.6
-	hl.OutlineTransparency = 0
-	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	hl.Parent = character
-	return hl
-end
-
-local function getAimPosition(character)
-	local upperTorso = character:FindFirstChild("UpperTorso")
-	local root = character:FindFirstChild("HumanoidRootPart")
-	local torso = character:FindFirstChild("Torso") -- R6
-
-	local basePos
-	if upperTorso then
-		basePos = upperTorso.Position
-	elseif torso then
-		basePos = torso.Position
-	elseif root then
-		basePos = root.Position + Vector3.new(0, 1.15, 0)
-	else
-		local head = character:FindFirstChild("Head")
-		if head then
-			basePos = head.Position - Vector3.new(0, 0.7, 0)
-		else
-			return nil
-		end
-	end
-
-	-- Compensate for Shift Lock camera being on the right side
-	-- This pulls the aim point so the crosshair lands closer to the middle of the torso
-	local compensated = basePos - Camera.CFrame.RightVector * SHIFTLOCK_COMPENSATION
-	return compensated
-end
-
-local function livingAim(character)
-    local humanoid = character and character.Parent and character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return nil end
-    return getAimPosition(character)
-end
-
-local function customTeam(player)
-    local value = player:GetAttribute("Team")
-    if type(value) == "number" then return value end
-    if type(value) ~= "string" then return nil end
-    local team = value:lower()
-    if team == "" or team == "neutral" or team == "none" or team == "spectator" then return nil end
-    return team
-end
-
-local function isOpponent(player)
-    if player == LP then return false end
-    local ownTeam, otherTeam = customTeam(LP), customTeam(player)
-    if game.GameId == 280343502 or ownTeam ~= nil or otherTeam ~= nil then
-        return ownTeam ~= nil and otherTeam ~= nil and ownTeam ~= otherTeam
-    end
-    return LP.Neutral or player.Neutral or not LP.Team or player.Team ~= LP.Team
-end
-
-local function getClosestPlayer()
-	-- Exact raycast first
-	local unitRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = {LP.Character, Camera}
-
-	local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 1200, params)
-	if result then
-		local character = result.Instance:FindFirstAncestorOfClass("Model")
-		if character then
-			local player = Players:GetPlayerFromCharacter(character)
-			if player and isOpponent(player) and livingAim(player.Character) then
-				return player
-			end
-		end
-	end
-
-	-- Nearby fallback
-	local closestPlayer = nil
-	local closestScore = math.huge
-	local camPos = Camera.CFrame.Position
-	local camLook = Camera.CFrame.LookVector
-
-	for _, player in ipairs(Players:GetPlayers()) do
-		if isOpponent(player) and player.Character then
-			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-			local aimPos = getAimPosition(player.Character)
-
-			if humanoid and humanoid.Health > 0 and aimPos then
-				local distance = (aimPos - camPos).Magnitude
-				if distance > 0.001 then
-					local direction = (aimPos - camPos).Unit
-					local angle = math.deg(math.acos(math.clamp(camLook:Dot(direction), -1, 1)))
-
-					if angle <= MAX_LOCK_ANGLE then
-						local score = distance + (angle * 1.6)
-						if score < closestScore then
-							closestScore = score
-							closestPlayer = player
-						end
-					end
-				end
-			end
-		end
-	end
-
-	return closestPlayer
-end
-
-local function nearestReplacement(excluded)
-    local ownRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-    local origin = ownRoot and ownRoot.Position or Camera.CFrame.Position
-    local best, distance = nil, math.huge
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= excluded and isOpponent(player) then
-            local position = livingAim(player.Character)
-            if position then
-                local gap = (position - origin).Magnitude
-                if gap < distance then best, distance = player, gap end
-            end
-        end
-    end
-    return best
-end
-
-local function lockTarget(player)
-    clearTarget()
-    if not player or not livingAim(player.Character) then return end
-    LockedPlayer, LockedCharacter = player, player.Character
-    Highlight = createHighlight(LockedCharacter)
-end
-
-local Controller = {HubOnly = true, Destroyed = false, Enabled = false}
-function Controller:SetEnabled(value)
-    if self.Destroyed or self.Enabled == value then return end
-    if not value then
-        self.Enabled = false
-        if FollowConnection then FollowConnection:Disconnect(); FollowConnection = nil end
-        clearTarget()
-        return
-    end
-
-    assert(UIS.KeyboardEnabled, "This aimlock is PC only")
-    local target = getClosestPlayer()
-    if not target then return end
-    self.Enabled = true
-    lockTarget(target)
-    local nextSearch = 0
-    FollowConnection = RunService.RenderStepped:Connect(function()
-        local targetPos
-        if LockedPlayer and LockedPlayer.Parent == Players and isOpponent(LockedPlayer) and LockedPlayer.Character == LockedCharacter then
-            targetPos = livingAim(LockedCharacter)
-        end
-        if not targetPos and (LockedPlayer or os.clock() >= nextSearch) then
-            local previous = LockedPlayer
-            lockTarget(nearestReplacement(previous))
-            nextSearch = os.clock() + 0.25
-            targetPos = LockedCharacter and livingAim(LockedCharacter)
-        end
-        if not targetPos then return end
-
-        local camPos = Camera.CFrame.Position
-        if (targetPos - camPos).Magnitude > 0.001 then
-            Camera.CFrame = Camera.CFrame:Lerp(CFrame.lookAt(camPos, targetPos), LOCK_STRENGTH)
-        end
-    end)
-end
-
-function Controller:GetSnapshot()
-    local status = LockedPlayer and ("Locked: "..LockedPlayer.DisplayName)
-        or (self.Enabled and "Waiting for a living target" or "Off")
-    return {Enabled = self.Enabled, Status = status}
-end
-
-function Controller:Destroy()
-    if self.Destroyed then return end
-    self:SetEnabled(false)
-    self.Destroyed = true
-    if getgenv().__INK_SOFT_CAMERA_MOBILE == self then getgenv().__INK_SOFT_CAMERA_MOBILE = nil end
-end
-
-getgenv().__INK_SOFT_CAMERA_MOBILE = Controller
-return Controller
-]====],
 UnlockDash=[====[
 assert(game.GameId == 7008097940, "Open Ink Game first")
 local player = game:GetService("Players").LocalPlayer
@@ -20763,10 +20546,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r44",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r45",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r44 · Aim Lock distance cap removed · all features OFF."
+local note="Build r45 · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -20816,7 +20599,6 @@ local features={
     {Id="fnp",Section="Friday Night Partying",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, sustains and chords · skips harmful notes",Badge="Friday Night Partying",Game=FNP,Key="__FNP_AUTOPLAY",Source="FNP"},
     {Id="bfnf",Section="Basically FNF: Remix",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · local lanes",Badge="Basically FNF: Remix",Game=BFNF,Key="__BFNF_AUTOPLAY",Source="BFNF"},
     {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
-    {Id="camera",Section="Universal",Category="Aim",Name="Soft Camera Lock",Subtitle="PC only · C to lock/unlock · red highlight",Badge="PC only",PCOnly=true,Key="__INK_SOFT_CAMERA_MOBILE",Source="Camera"},
     {Id="unlock_dash",Section="Ink Game",Category="Movement",Name="Unlock Dash",Subtitle="Sets Faster Sprint to level 5 locally",Game=INK,Source="UnlockDash"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dodge",Subtitle="v8.04 · native dash and attack prediction",PCOnly=true,Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · stops on red until finish",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
@@ -21192,8 +20974,6 @@ connect(UIS.WindowFocusReleased,function()drag=nil end)
 connect(UIS.InputBegan,function(input,processed)
     if processed or UIS:GetFocusedTextBox()then return end
     if input.KeyCode==Enum.KeyCode.RightShift then window.Visible=not window.Visible
-    elseif input.KeyCode==Enum.KeyCode.C and UIS.KeyboardEnabled then
-        for _,f in ipairs(features)do if f.Id=="camera" then change(f);break end end
     end
 end)
 function hub:Destroy()
