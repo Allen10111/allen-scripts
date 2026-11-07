@@ -1611,6 +1611,22 @@ local function livingAim(character)
     return getAimPosition(character)
 end
 
+local function customTeam(player)
+    local value = player:GetAttribute("Team")
+    if type(value) == "number" then return value end
+    if type(value) ~= "string" then return nil end
+    local team = value:lower()
+    if team == "" or team == "neutral" or team == "none" or team == "spectator" then return nil end
+    return team
+end
+
+local function isOpponent(player)
+    if player == LP then return false end
+    local ownTeam, otherTeam = customTeam(LP), customTeam(player)
+    if ownTeam ~= nil and otherTeam ~= nil then return ownTeam ~= otherTeam end
+    return LP.Neutral or player.Neutral or not LP.Team or player.Team ~= LP.Team
+end
+
 local function getClosestPlayer()
 	-- Exact raycast first
 	local unitRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
@@ -1623,7 +1639,7 @@ local function getClosestPlayer()
 		local character = result.Instance:FindFirstAncestorOfClass("Model")
 		if character then
 			local player = Players:GetPlayerFromCharacter(character)
-			if player and player ~= LP and livingAim(player.Character) then
+			if player and isOpponent(player) and livingAim(player.Character) then
 				return player
 			end
 		end
@@ -1636,7 +1652,7 @@ local function getClosestPlayer()
 	local camLook = Camera.CFrame.LookVector
 
 	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LP and player.Character then
+		if isOpponent(player) and player.Character then
 			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 			local aimPos = getAimPosition(player.Character)
 
@@ -1666,7 +1682,7 @@ local function nearestReplacement(excluded)
     local origin = ownRoot and ownRoot.Position or Camera.CFrame.Position
     local best, distance = nil, math.huge
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LP and player ~= excluded then
+        if player ~= excluded and isOpponent(player) then
             local position = livingAim(player.Character)
             if position then
                 local gap = (position - origin).Magnitude
@@ -1702,7 +1718,7 @@ function Controller:SetEnabled(value)
     local nextSearch = 0
     FollowConnection = RunService.RenderStepped:Connect(function()
         local targetPos
-        if LockedPlayer and LockedPlayer.Parent == Players and LockedPlayer.Character == LockedCharacter then
+        if LockedPlayer and LockedPlayer.Parent == Players and isOpponent(LockedPlayer) and LockedPlayer.Character == LockedCharacter then
             targetPos = livingAim(LockedCharacter)
         end
         if not targetPos and (LockedPlayer or os.clock() >= nextSearch) then
@@ -20746,10 +20762,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r41",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r42",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r41 · Aim Lock retargeting · all features OFF."
+local note="Build r42 · Team-aware Aim Lock · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
