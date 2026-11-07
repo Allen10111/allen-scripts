@@ -1695,7 +1695,7 @@ end
 return state
 ]====],
 Dodge=[====[
--- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC)
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (hub)
 -- The Allen Scripts hub controls this engine. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
@@ -1725,12 +1725,7 @@ end
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 
-if not UserInputService.KeyboardEnabled then
-    warn("[Ink Auto Dodge] PC keyboard version only")
-    return
-end
 
 local LocalPlayer = Players.LocalPlayer
 local Values = workspace:WaitForChild("Values", 10)
@@ -20661,10 +20656,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r47",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r48",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r47 · Adjustable Jailbreak Silent Aim FOV · all features OFF."
+local note="Build r48 · Ink Game mobile Auto Dodge · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -20716,7 +20711,7 @@ local features={
     {Id="bfnf",Section="Basically FNF: Remix",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · local lanes",Badge="Basically FNF: Remix",Game=BFNF,Key="__BFNF_AUTOPLAY",Source="BFNF"},
     {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
     {Id="unlock_dash",Section="Ink Game",Category="Movement",Name="Unlock Dash",Subtitle="Sets Faster Sprint to level 5 locally",Game=INK,Source="UnlockDash"},
-    {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dodge",Subtitle="v8.04 · native dash and attack prediction",PCOnly=true,Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
+    {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dodge",Subtitle="v8.04 · native dash and attack prediction",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · stops on red until finish",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
     {Id="dalgonaauto",Section="Ink Game",Category="Minigames",Name="Auto-complete Dalgona",Subtitle="Triggers native cookie completion · one attempt per cookie",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_auto",Source="DalgonaAuto"},
     {Id="dalgonalighter",Section="Ink Game",Category="Minigames",Name="Dalgona Lighter",Subtitle="Temporary client-side native lighter · hold to use",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_lighter",Source="DalgonaLighter"},

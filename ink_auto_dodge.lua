@@ -1,4 +1,4 @@
--- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC)
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (hub)
 -- The Allen Scripts hub controls this engine. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
@@ -28,12 +28,7 @@ end
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 
-if not UserInputService.KeyboardEnabled then
-    warn("[Ink Auto Dodge] PC keyboard version only")
-    return
-end
 
 local LocalPlayer = Players.LocalPlayer
 local Values = workspace:WaitForChild("Values", 10)
