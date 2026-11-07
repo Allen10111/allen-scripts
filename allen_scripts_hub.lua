@@ -1695,7 +1695,7 @@ end
 return state
 ]====],
 Dodge=[====[
--- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (hub)
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.05 (hub)
 -- The Allen Scripts hub controls this engine. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
@@ -1795,7 +1795,7 @@ local ZERO = Vector3.zero
 local DIRECTION_SAMPLE_TIMES = { 0.04, 0.08, 0.14, 0.22, 0.34, 0.5 }
 
 local State = {
-    Version = 8.04,
+    Version = 8.05,
     MinimumActionPlanningBudget = 0.0018,
     PlanningReserveUses = 0,
     LocalRestCorrections = 0,
@@ -1840,6 +1840,7 @@ local State = {
     PendingDodgeAudits = {},
     AuditHealthConnection = nil,
     AuditHumanoid = nil,
+    UnmatchedHealthDrops = 0,
     LastEvidenceTier = "No observation",
     LastDodgeOutcome = "No observation",
     TerrainResultCache = {},
@@ -1859,7 +1860,7 @@ local State = {
     DashWalkConfirmMinSpeed = 6,
     DashForwardFacingDot = 0.7,
     DashRetryWindow = 0.12,
-    DashRetryMaximum = DASH_LINK_WINDOW,
+    DashRetryMaximum = 0.25,
     MaxDeferredDashAttacks = 3,
     PhantomTerrainSafetyScale = 1.12,
     FlingGuardWindow = 0.16,
@@ -2312,7 +2313,6 @@ function State:IsDashRetryFresh(candidate, now)
         and now - candidate.At <= math.clamp(
             math.max(
                 self.DashRetryWindow,
-                DASH_LINK_WINDOW,
                 2 * (self.DecayingWorstFrame or self.FrameMean or 1 / 60)
                     + (self.PingDeviation or 0)
             ),
@@ -2494,9 +2494,9 @@ end
 function State:ResolveDashControllerState(character)
     local now = os.clock()
     local cached = self.DashControllerState
-    local cachedInfo = self.DashControllerInfo
+    local info = resolveDashInfo(character)
     if self.DashControllerCharacter == character
-        and cachedInfo and cachedInfo.Parent
+        and info and self.DashControllerInfo == info
         and type(cached) == "table"
         and type(rawget(cached, "CDDASHSTACKS")) == "number" then
         return cached
@@ -2506,6 +2506,7 @@ function State:ResolveDashControllerState(character)
     -- every HUD refresh and every availability check.  Negative-cache that
     -- bounded probe so fallback mode cannot create a rhythmic hitch.
     if self.DashControllerCharacter == character
+        and self.DashControllerInfo == info
         and not cached
         and now < (self.DashControllerRetryAt or 0) then
         return nil
@@ -2514,7 +2515,7 @@ function State:ResolveDashControllerState(character)
     self:ClearDashControllerCache()
     self.DashControllerCharacter = character
     self.DashControllerRetryAt = now + DASH_STATE_RETRY_INTERVAL
-    local info = resolveDashInfo(character)
+    self.DashControllerInfo = info
     if not info or type(getconnections) ~= "function"
         or not debug or type(debug.getupvalues) ~= "function" then
         return nil
@@ -3006,10 +3007,20 @@ function State:BindAuditHealth(character)
         last = health
         if not self.Enabled or loss <= 0 then return end
         local now = os.clock()
+        local matchedWindow = false
         for _, record in ipairs(self.PendingDodgeAudits) do
             if record.Character == character and now <= record.EndsAt then
                 record.HealthLoss += loss
+                matchedWindow = true
             end
+        end
+        if not matchedWindow then
+            self.UnmatchedHealthDrops += 1
+            local block = self.LastDecisionBlock
+            local recentBlock = block and now - block.At <= 0.5 and block.Reason or nil
+            pushReplay("health_loss_outside_dash", now, {
+                Loss = loss, Health = health, RecentDecisionBlock = recentBlock,
+            })
         end
     end)
 end
@@ -3163,6 +3174,7 @@ function State:GetAuditSnapshot(limit)
     return {
         Version = self.Version, Profiles = profiles, Outcomes = outcomes,
         Blocks = blocks, RecentEvents = self:GetReplaySnapshot(math.min(limit, 24)),
+        UnmatchedHealthDrops = self.UnmatchedHealthDrops,
         ProfileCount = self.AttackAuditCount, DroppedProfiles = self.AuditDroppedProfiles,
         DashDispatchMode = self.DashDispatchMode,
         NativeDashMode = self.NativeModel and self.NativeModel.Mode or "Not sampled",
@@ -5821,6 +5833,7 @@ local function weaponContactTime(
     bodyPositionAt
 )
     local sample = threat.WeaponSample
+    endTime = math.min(endTime, WEAPON_SAMPLE_HORIZON)
     if not sample or endTime < startTime then
         return nil
     end
@@ -5854,7 +5867,7 @@ local function weaponContactTime(
     local previousBody = bodyPositionAt and bodyPositionAt(previousTime)
         or predictPosition(localMotion, previousTime, true)
     for index = 1, steps do
-        local sampleTime = startTime + duration * index / steps
+        local sampleTime = math.min(endTime, startTime + duration * index / steps)
         local base, tip = weaponSegmentAt(threat, sampleTime, attackerMotion)
         if not base then
             break
@@ -6499,7 +6512,8 @@ local function attackHitsAt(
     attackerMotion,
     uncertainty,
     localPositionOverride,
-    withAcceleration
+    withAcceleration,
+    analyticOnly
 )
     local profile = threat.Profile
     local localPosition = localPositionOverride
@@ -6539,7 +6553,7 @@ local function attackHitsAt(
         return false
     end
 
-    if threat.WeaponSample then
+    if threat.WeaponSample and not analyticOnly then
         local weaponBase, weaponTip, weaponRadius = weaponSegmentAt(
             threat,
             timeAhead,
@@ -7223,20 +7237,23 @@ local function evaluateThreat(threat, now, localCharacter, localRoot, localMotio
                 windowEnd,
                 uncertainty
             )
-        else
+        end
+        local analyticStart = threat.WeaponSample and math.max(windowStart, WEAPON_SAMPLE_HORIZON) or windowStart
+        if not contactTime and (not threat.WeaponSample or windowEnd > WEAPON_SAMPLE_HORIZON)
+            and analyticStart <= windowEnd then
             local broadEntry = sphereEntry(
                 relativePosition,
                 relativeVelocity,
                 broadRadius,
-                windowStart,
+                analyticStart,
                 windowEnd
             )
 
             if not broadEntry
                 and (threat.DashAttack or relativeAcceleration.Magnitude > 80) then
                 for sampleIndex = 0, 5 do
-                    local sampleTime = windowStart
-                        + (windowEnd - windowStart) * sampleIndex / 5
+                    local sampleTime = analyticStart
+                        + (windowEnd - analyticStart) * sampleIndex / 5
                     local acceleratedRelative = predictPosition(
                         localMotion,
                         sampleTime,
@@ -7266,12 +7283,12 @@ local function evaluateThreat(threat, now, localCharacter, localRoot, localMotio
                     1
                 )
                 local steps = math.clamp(math.ceil(
-                    relativeSpeed * (windowEnd - windowStart) / sampleWidth
+                    relativeSpeed * (windowEnd - analyticStart) / sampleWidth
                 ), 6, 12)
-                local previousTime = windowStart
+                local previousTime = analyticStart
                 for sampleIndex = 0, steps do
-                    local sampleTime = windowStart
-                        + (windowEnd - windowStart) * sampleIndex / steps
+                    local sampleTime = analyticStart
+                        + (windowEnd - analyticStart) * sampleIndex / steps
                     local hit = attackHitsAt(
                         threat,
                         sampleTime,
@@ -7279,7 +7296,7 @@ local function evaluateThreat(threat, now, localCharacter, localRoot, localMotio
                         attackerMotion,
                         uncertainty,
                         nil,
-                        false
+                        false, true
                     ) or attackHitsAt(
                         threat,
                         sampleTime,
@@ -7287,7 +7304,7 @@ local function evaluateThreat(threat, now, localCharacter, localRoot, localMotio
                         attackerMotion,
                         uncertainty,
                         nil,
-                        true
+                        true, true
                     )
                     if hit then
                         local low = previousTime
@@ -7301,7 +7318,7 @@ local function evaluateThreat(threat, now, localCharacter, localRoot, localMotio
                                 attackerMotion,
                                 uncertainty,
                                 nil,
-                                true
+                                true, true
                             ) then
                                 high = middle
                             else
@@ -7325,7 +7342,7 @@ local function evaluateThreat(threat, now, localCharacter, localRoot, localMotio
                     and travelAlignment > 0.25 then
                     if attackHitsAt(
                         threat, broadEntry, localMotion, attackerMotion,
-                        uncertainty, nil, true
+                        uncertainty, nil, true, true
                     ) then
                         contactTime = broadEntry
                     end
@@ -7334,27 +7351,28 @@ local function evaluateThreat(threat, now, localCharacter, localRoot, localMotio
 
             if not contactTime
                 and currentDistance <= profile.Range + uncertainty
-                and activeStart <= lead + State.FrameMean then
+                and math.max(activeStart, analyticStart) <= lead + State.FrameMean then
+                local probeStart = math.max(activeStart, analyticStart)
                 local hitAtStart = attackHitsAt(
                     threat,
-                    activeStart,
+                    probeStart,
                     localMotion,
                     attackerMotion,
                     uncertainty,
                     nil,
-                    true
+                    true, true
                 )
-                local hitAtEnd = activeEnd > activeStart and attackHitsAt(
+                local hitAtEnd = activeEnd > probeStart and attackHitsAt(
                     threat,
                     activeEnd,
                     localMotion,
                     attackerMotion,
                     uncertainty,
                     nil,
-                    true
+                    true, true
                 )
                 if hitAtStart or hitAtEnd then
-                    contactTime = activeStart
+                    contactTime = probeStart
                 end
             end
         end
@@ -8142,6 +8160,22 @@ local function physicalSegmentAt(record, timeAhead, targetPosition)
         return nil
     end
     local time = math.clamp(timeAhead, 0, MAX_PREDICTION_TIME)
+    -- Detection and route scoring share the same sampled path for projectiles
+    -- whose trajectory does not depend on the target's escape direction.
+    local trajectory = record.Trajectory
+    local last = trajectory and trajectory[#trajectory]
+    if record.Model ~= "Homing" and record.TrajectorySampleAt == record.SampleAt
+        and last and time <= last.Time then
+        for index = 2, #trajectory do
+            local sample = trajectory[index]
+            if time <= sample.Time then
+                local previous = trajectory[index - 1]
+                local span = sample.Time - previous.Time
+                local alpha = span > 0 and (time - previous.Time) / span or 0
+                return previous.Base:Lerp(sample.Base, alpha), previous.Tip:Lerp(sample.Tip, alpha), record.Radius
+            end
+        end
+    end
     local center = record.Center
     local velocity = record.Velocity
     local steps = math.clamp(math.ceil(time / 0.045), 1, MAX_SWEEP_STEPS)
@@ -8265,6 +8299,7 @@ local function buildPhysicalTrajectory(record, localMotion, horizon, bodyPositio
         trajectory[index] = nil
     end
     record.TrajectoryCount = count
+    record.TrajectorySampleAt = record.SampleAt
     return trajectory
 end
 
@@ -8306,7 +8341,8 @@ local function physicalBroadPhaseMayHit(record, localMotion, horizon, uncertaint
             * math.min(record.Acceleration.Magnitude, 600)
             * horizon * horizon
     end
-    local combined = BODY_RADIUS + record.Radius + uncertainty
+    local halfLength = record.Base and record.Tip and (record.Tip - record.Base).Magnitude * 0.5 or 0
+    local combined = BODY_HALF_HEIGHT + BODY_RADIUS + halfLength + record.Radius + uncertainty
         + maneuverPadding + 0.75
     return miss <= combined
 end
@@ -9873,11 +9909,15 @@ end
 
 function State:IsWalkableSupport(result, roleCache, minimumNormalY)
     local part = result and result.Instance
+    -- Terrain is one instance for many materials. Classify this hit before
+    -- consulting the cache of instance-wide geometry properties.
+    if part and part:IsA("Terrain")
+        and (result.Material == Enum.Material.Water
+            or result.Material == Enum.Material.CrackedLava) then
+        return false, { Hazard = true }
+    end
     local role = part and roleCache and roleCache[part]
     if part and not role then
-        local terrainHazard = part:IsA("Terrain") and result
-            and (result.Material == Enum.Material.Water
-                or result.Material == Enum.Material.CrackedLava)
         local physical = part:IsA("Terrain")
             or part:IsA("BasePart") and part.CanCollide and part.CanQuery
         local stable = true
@@ -9907,7 +9947,7 @@ function State:IsWalkableSupport(result, roleCache, minimumNormalY)
             Physical = physical,
             Stable = stable,
             Barrier = self:IsBarrierGeometry(part),
-            Hazard = terrainHazard or self:IsHazardGeometry(part),
+            Hazard = self:IsHazardGeometry(part),
         }
         if roleCache then
             roleCache[part] = role
@@ -10230,7 +10270,7 @@ end
 function State:GroupThreatMayReach(threat, rootPosition, travel)
     if (threat.EvaluationStart or 0) > MAX_PREDICTION_TIME then return false end
     local motion, projectile = threat.AttackerMotion, threat.PhysicalProjectile
-    local position = projectile and projectile.Position or motion and motion.Position
+    local position = projectile and projectile.Center or motion and motion.Position
     if not position or not rootPosition then return true end
     local horizon = math.min(MAX_PREDICTION_TIME, math.max(0, threat.EvaluationEnd or 0.5))
     local velocity = projectile and projectile.Velocity or motion and motion.Velocity or ZERO
@@ -13191,6 +13231,7 @@ local function processFrame(deltaTime, generation)
         end
     end
     local localCharacter, localHumanoid, localRoot = getLocalCharacter()
+    if State.AuditHumanoid ~= localHumanoid then State:BindAuditHealth(localCharacter) end
     -- Track power transitions even with no active threat.  This resets the
     -- fallback RecentDash baseline on unequip/re-equip, so a normal dash from
     -- another power cannot be miscounted as a Phantom charge.
@@ -13955,6 +13996,11 @@ function State:RunSelfTest()
         0.1,
         0.5
     ) == false
+    broadProjectile.Center = Vector3.new(0, 5, 6)
+    broadProjectile.Velocity = ZERO
+    broadProjectile.Base = broadProjectile.Center - Vector3.new(0, 0, 9)
+    broadProjectile.Tip = broadProjectile.Center + Vector3.new(0, 0, 9)
+    result.LongProjectilePassesBroadPhase = physicalBroadPhaseMayHit(broadProjectile, broadMotion, 0.1, 0.5)
     result.GunExclusion = hasGunToken("Golden Revolver")
         and hasGunToken("RifleBullet")
         and not hasGunToken("Fork")
@@ -14091,6 +14137,11 @@ function State:RunSelfTest()
         Generation = State.Generation,
     }
     result.DashRetryFresh = State:IsDashRetryFresh(retryProbe, 10.06)
+    local retryTimingProbe = setmetatable({DecayingWorstFrame = 1 / 60, PingDeviation = 0}, {__index = State})
+    result.DashRetryRejectsStaleAtNormalFrameRate = not retryTimingProbe:IsDashRetryFresh(retryProbe, 10.16)
+    retryTimingProbe.DecayingWorstFrame = 0.075
+    retryTimingProbe.PingDeviation = 0.035
+    result.DashRetryAllowsObservedJitter = retryTimingProbe:IsDashRetryFresh(retryProbe, 10.16)
     result.DashRetryExpires = not State:IsDashRetryFresh(
         retryProbe,
         10 + State.DashRetryMaximum + 0.001
@@ -20656,10 +20707,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r48",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r49",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r48 · Ink Game mobile Auto Dodge · all features OFF."
+local note="Build r49 · Ink Game Auto Dodge v8.05 · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -20711,7 +20762,7 @@ local features={
     {Id="bfnf",Section="Basically FNF: Remix",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · local lanes",Badge="Basically FNF: Remix",Game=BFNF,Key="__BFNF_AUTOPLAY",Source="BFNF"},
     {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
     {Id="unlock_dash",Section="Ink Game",Category="Movement",Name="Unlock Dash",Subtitle="Sets Faster Sprint to level 5 locally",Game=INK,Source="UnlockDash"},
-    {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dodge",Subtitle="v8.04 · native dash and attack prediction",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
+    {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dodge",Subtitle="v8.05 · native dash and attack prediction",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · stops on red until finish",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
     {Id="dalgonaauto",Section="Ink Game",Category="Minigames",Name="Auto-complete Dalgona",Subtitle="Triggers native cookie completion · one attempt per cookie",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_auto",Source="DalgonaAuto"},
     {Id="dalgonalighter",Section="Ink Game",Category="Minigames",Name="Dalgona Lighter",Subtitle="Temporary client-side native lighter · hold to use",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_lighter",Source="DalgonaLighter"},
