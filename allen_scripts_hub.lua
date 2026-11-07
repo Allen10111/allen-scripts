@@ -16123,6 +16123,9 @@ local function weaponMatches(c,kind)
 end
 local watches,threats={},{}
 local heartbeat,lastScan,lastAttempt,statusUntil,elapsed=nil,0,-math.huge,0,0
+local AIM_STABILITY_SECONDS=.025
+local AIM_TURN_RATE=4.5
+local AIM_ANGLE_NOISE=math.rad(1)
 local function log(...)print("[DODGE ISOLATED]",...)end
 local function live(p)
     local c=p.Character;local h=c and c:FindFirstChildOfClass("Humanoid");local r=c and c:FindFirstChild("HumanoidRootPart")
@@ -16158,12 +16161,29 @@ local function slotHandler()
     end
     return nil,"DODGE! must be visible in the hotbar"
 end
+local function observeAim(root,target,threat,now)
+    local offset=target.Position-root.Position
+    local flat=Vector3.new(offset.X,0,offset.Z)
+    local look=root.CFrame.LookVector
+    local facing=Vector3.new(look.X,0,look.Z)
+    local gap=threat.LastLookAt and now-threat.LastLookAt or math.huge
+    local turning=threat.LastLook and gap>0
+        and math.acos(math.clamp(look:Dot(threat.LastLook),-1,1))>math.max(AIM_ANGLE_NOISE,AIM_TURN_RATE*gap)
+    threat.LastLook,threat.LastLookAt=look,now
+    if gap>.12 or turning then threat.DirectedSince=nil end
+    if turning or flat.Magnitude<.1 or facing.Magnitude<.1 or facing.Unit:Dot(flat.Unit)<.65 then
+        threat.DirectedSince=nil
+        return
+    end
+    threat.DirectedSince=threat.DirectedSince or now
+    return flat.Unit
+end
 local function scan()
     local present={};local n=0
     for _,p in ipairs(Players:GetPlayers())do
         if p~=LP then
             n+=1;if n>32 then break end
-            local c,h=live(p);local a=h and h:FindFirstChildOfClass("Animator")
+            local c,h,root=live(p);local a=h and h:FindFirstChildOfClass("Animator")
             if a then
                 present[p]=a
                 if not watches[p]or watches[p].Animator~=a then
@@ -16174,10 +16194,15 @@ local function scan()
                         local profile=id and animationIds[id]
                         if profile and weaponMatches(c,profile.Kind)then
                             local now=os.clock()
-                            local started=now-track.TimePosition/math.max(track.Speed,.01)
+                            local phase=track.TimePosition
+                            local started=now-phase/math.max(track.Speed,.01)
                             local previous=threats[p]
                             if previous and previous.Track==track and math.abs(started-previous.Started)<.12 then return end
-                            threats[p]={Character=c,Track=track,Profile=profile,Started=started,Expires=now+1.2,Attempted=false}
+                            local threat={Character=c,Track=track,Profile=profile,Started=started,
+                                ReceivedAt=now,ReceivedPhase=phase,AnimationId=id,Expires=now+1.2,Attempted=false}
+                            local _,_,target=live(LP)
+                            if target and root.Parent==c then observeAim(root,target,threat,now)end
+                            threats[p]=threat
                             log("swing",p.Name,profile.Kind,id)
                         end
                     end)}
@@ -16224,29 +16249,15 @@ return P
 
 end)()
 local function stableThreat(root,target,threat,now)
-    local offset=target.Position-root.Position
-    local flat=Vector3.new(offset.X,0,offset.Z)
+    local direction=observeAim(root,target,threat,now)
+    if not direction or now-threat.DirectedSince<AIM_STABILITY_SECONDS then return end
     local frame=root.CFrame
-    local look=frame.LookVector
-    local facing=Vector3.new(look.X,0,look.Z)
-    local gap=threat.LastLookAt and now-threat.LastLookAt or math.huge
-    local turning=threat.LastLook and gap>0
-        and math.acos(math.clamp(look:Dot(threat.LastLook),-1,1))>4.5*gap
-    threat.LastLook,threat.LastLookAt=look,now
-    if gap>.12 or turning then threat.DirectedSince=nil end
-    if turning or flat.Magnitude<.1 or facing.Magnitude<.1 or facing.Unit:Dot(flat.Unit)<.65 then
-        threat.DirectedSince=nil
-        return
-    end
-    -- Track aim during the wind-up so the 50 ms stability check does not delay an imminent hit.
-    threat.DirectedSince=threat.DirectedSince or now
-    if now-threat.DirectedSince<.05 then return end
     local point=frame:PointToObjectSpace(target.Position)
     local attackerVelocity=root.AssemblyLinearVelocity
     local relative=frame:VectorToObjectSpace(target.AssemblyLinearVelocity-attackerVelocity)
     local profile,track=threat.Profile,threat.Track
     return DashPolicy.Contact(point.X,point.Y,point.Z,relative.X,relative.Y,relative.Z,
-        profile.Range,track.TimePosition,track.Speed,profile.ActiveStart,profile.ActiveEnd,attackerVelocity:Dot(flat.Unit))
+        profile.Range,track.TimePosition,track.Speed,profile.ActiveStart,profile.ActiveEnd,attackerVelocity:Dot(direction))
 end
 local lineOfSight=RaycastParams.new()
 lineOfSight.FilterType=Enum.RaycastFilterType.Exclude
@@ -16263,6 +16274,11 @@ end
 local function step()
     local now=os.clock()
     if now-lastScan>=.5 then lastScan=now;scan()end
+    for p,t in pairs(threats)do
+        if now>t.Expires or not t.Track.IsPlaying or t.Track.TimePosition>=t.Profile.ActiveEnd or p.Character~=t.Character then
+            threats[p]=nil
+        end
+    end
     local c,_,r=live(LP);if not c then return end
     local bag=LP:FindFirstChildOfClass("Backpack")
     if not(c:FindFirstChild("DODGE!")or bag and bag:FindFirstChild("DODGE!"))then S.Status="DODGE! item required";return end
@@ -16271,8 +16287,7 @@ local function step()
     if S.PendingInput then return end
     if now>statusUntil then S.Status="Watching knife / weak fists + dash approach · one activation per swing"end
     for p,t in pairs(threats)do
-        if now>t.Expires or not t.Track.IsPlaying or t.Track.TimePosition>=t.Profile.ActiveEnd or p.Character~=t.Character then threats[p]=nil
-        elseif not t.Attempted and now-lastAttempt>=.55 then
+        if not t.Attempted and now-lastAttempt>=.55 then
             local attacker,_,root=live(p)
             if not attacker or not weaponMatches(attacker,t.Profile.Kind)then
                 t.DirectedSince=nil
@@ -16305,7 +16320,9 @@ local function step()
                         return
                     end
                     t.Attempted=true;lastAttempt=os.clock();S.Attempts+=1;statusUntil=lastAttempt+2
-                    log("confirmed directed swing; native button attempt",S.Attempts,"ETA",currentEntry,"phase",t.Track.TimePosition)
+                    log("confirmed directed swing; native button attempt",S.Attempts,"ETA",currentEntry,
+                        "phase",t.Track.TimePosition,"received",t.ReceivedPhase,
+                        "decisionMs",math.floor((lastAttempt-t.ReceivedAt)*1000+.5),"animation",t.AnimationId)
                     local ok,err=pcall(handler)
                     if not ok then
                         log("native button error",tostring(err));S:SetEnabled(false);S.Status="Native hotbar handler failed";return
@@ -16330,7 +16347,9 @@ function S:SetEnabled(value)
     if not self.Enabled then self.Status="Off";log("OFF");return end
     lastScan=0;elapsed=0
     heartbeat=Run.Heartbeat:Connect(function(dt)
-        elapsed+=dt;if elapsed<1/30 then return end;elapsed=0
+        elapsed+=dt
+        if elapsed<1/30 and next(threats)==nil then return end
+        elapsed=0
         local started=os.clock();local ok,err=pcall(step)
         local duration=(os.clock()-started)*1000;self.MaxStepMs=math.max(self.MaxStepMs,duration)
         if not ok or duration>50 then self:SetEnabled(false);self.Status="Stopped by error / timing guard";log("GUARD STOP",tostring(err),duration)end
@@ -21051,10 +21070,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-07-r52",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-07-r53",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r52 · all features OFF."
+local note="Build r53 · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
