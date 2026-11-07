@@ -1548,6 +1548,7 @@ local Camera = workspace.CurrentCamera
 local Mouse = LP:GetMouse()
 
 local LockedPlayer = nil
+local LockedCharacter = nil
 local Highlight = nil
 local FollowConnection = nil
 
@@ -1559,17 +1560,9 @@ local MAX_LOCK_ANGLE = 40
 -- Higher value = moves crosshair more toward center of torso
 local SHIFTLOCK_COMPENSATION = 0.55
 
-local function clearLock()
-	if Highlight then
-		Highlight:Destroy()
-		Highlight = nil
-	end
-	if FollowConnection then
-		FollowConnection:Disconnect()
-		FollowConnection = nil
-	end
-	LockedPlayer = nil
-	print("Camera unlocked")
+local function clearTarget()
+    if Highlight then Highlight:Destroy(); Highlight = nil end
+    LockedPlayer, LockedCharacter = nil, nil
 end
 
 local function createHighlight(character)
@@ -1612,6 +1605,12 @@ local function getAimPosition(character)
 	return compensated
 end
 
+local function livingAim(character)
+    local humanoid = character and character.Parent and character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return nil end
+    return getAimPosition(character)
+end
+
 local function getClosestPlayer()
 	-- Exact raycast first
 	local unitRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
@@ -1624,7 +1623,7 @@ local function getClosestPlayer()
 		local character = result.Instance:FindFirstAncestorOfClass("Model")
 		if character then
 			local player = Players:GetPlayerFromCharacter(character)
-			if player and player ~= LP and player.Character and getAimPosition(player.Character) then
+			if player and player ~= LP and livingAim(player.Character) then
 				return player
 			end
 		end
@@ -1662,63 +1661,79 @@ local function getClosestPlayer()
 	return closestPlayer
 end
 
-local function startLock(player)
-	if not player or not player.Character then return end
-	if not getAimPosition(player.Character) then return end
-
-	LockedPlayer = player
-	Highlight = createHighlight(player.Character)
-
-	FollowConnection = RunService.RenderStepped:Connect(function()
-		if not LockedPlayer or not LockedPlayer.Character then
-			clearLock()
-			return
-		end
-
-		local targetPos = getAimPosition(LockedPlayer.Character)
-		if not targetPos then return end
-
-		if not Highlight or Highlight.Parent ~= LockedPlayer.Character then
-			if Highlight then Highlight:Destroy() end
-			Highlight = createHighlight(LockedPlayer.Character)
-		end
-
-		local camPos = Camera.CFrame.Position
-		local desired = CFrame.lookAt(camPos, targetPos)
-		Camera.CFrame = Camera.CFrame:Lerp(desired, LOCK_STRENGTH)
-	end)
-
-	print("Locked onto:", player.Name)
-end
-
-local removingConnection=Players.PlayerRemoving:Connect(function(player)
-	if player == LockedPlayer then
-		clearLock()
-	end
-end)
-
-local Controller={HubOnly=true,Destroyed=false}
-function Controller:SetEnabled(value)
-    if self.Destroyed then return end
-    if value then
-        assert(UIS.KeyboardEnabled,"This aimlock is PC only")
-        if not LockedPlayer then
-            local target=getClosestPlayer()
-            if target then startLock(target) end
+local function nearestReplacement(excluded)
+    local ownRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+    local origin = ownRoot and ownRoot.Position or Camera.CFrame.Position
+    local best, distance = nil, math.huge
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP and player ~= excluded then
+            local position = livingAim(player.Character)
+            if position then
+                local gap = (position - origin).Magnitude
+                if gap < distance then best, distance = player, gap end
+            end
         end
-    else clearLock() end
+    end
+    return best
 end
+
+local function lockTarget(player)
+    clearTarget()
+    if not player or not livingAim(player.Character) then return end
+    LockedPlayer, LockedCharacter = player, player.Character
+    Highlight = createHighlight(LockedCharacter)
+end
+
+local Controller = {HubOnly = true, Destroyed = false, Enabled = false}
+function Controller:SetEnabled(value)
+    if self.Destroyed or self.Enabled == value then return end
+    if not value then
+        self.Enabled = false
+        if FollowConnection then FollowConnection:Disconnect(); FollowConnection = nil end
+        clearTarget()
+        return
+    end
+
+    assert(UIS.KeyboardEnabled, "This aimlock is PC only")
+    local target = getClosestPlayer()
+    if not target then return end
+    self.Enabled = true
+    lockTarget(target)
+    local nextSearch = 0
+    FollowConnection = RunService.RenderStepped:Connect(function()
+        local targetPos
+        if LockedPlayer and LockedPlayer.Parent == Players and LockedPlayer.Character == LockedCharacter then
+            targetPos = livingAim(LockedCharacter)
+        end
+        if not targetPos and (LockedPlayer or os.clock() >= nextSearch) then
+            local previous = LockedPlayer
+            lockTarget(nearestReplacement(previous))
+            nextSearch = os.clock() + 0.25
+            targetPos = LockedCharacter and livingAim(LockedCharacter)
+        end
+        if not targetPos then return end
+
+        local camPos = Camera.CFrame.Position
+        if (targetPos - camPos).Magnitude > 0.001 then
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.lookAt(camPos, targetPos), LOCK_STRENGTH)
+        end
+    end)
+end
+
 function Controller:GetSnapshot()
-    return {Enabled=LockedPlayer~=nil,Status=LockedPlayer and ("Locked: "..LockedPlayer.DisplayName) or "Off"}
+    local status = LockedPlayer and ("Locked: "..LockedPlayer.DisplayName)
+        or (self.Enabled and "Waiting for a living target" or "Off")
+    return {Enabled = self.Enabled, Status = status}
 end
+
 function Controller:Destroy()
     if self.Destroyed then return end
-    self.Destroyed=true
-    clearLock()
-    removingConnection:Disconnect()
-    if getgenv().__INK_SOFT_CAMERA_MOBILE==self then getgenv().__INK_SOFT_CAMERA_MOBILE=nil end
+    self:SetEnabled(false)
+    self.Destroyed = true
+    if getgenv().__INK_SOFT_CAMERA_MOBILE == self then getgenv().__INK_SOFT_CAMERA_MOBILE = nil end
 end
-getgenv().__INK_SOFT_CAMERA_MOBILE=Controller
+
+getgenv().__INK_SOFT_CAMERA_MOBILE = Controller
 return Controller
 ]====],
 UnlockDash=[====[
@@ -20731,10 +20746,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r40",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r41",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r40 · all features OFF."
+local note="Build r41 · Aim Lock retargeting · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
