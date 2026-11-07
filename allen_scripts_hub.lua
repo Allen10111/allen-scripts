@@ -1,5 +1,77 @@
 -- Allen Scripts general hub. All features start OFF.
 local SOURCES={
+SilentAim=[====[
+assert(game.GameId == 245662005, "Silent Aim currently supports Jailbreak")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local storage = game:GetService("ReplicatedStorage")
+local emitter = require(storage.Game.ItemSystem.BulletEmitter)
+local state = {HubOnly = true, Enabled = false, Destroyed = false}
+local original, wrapper
+
+local function targetDirection(origin, direction)
+    local team = player.Team and player.Team.Name
+    local enemyTeam = team == "Police" and "Criminal" or team == "Criminal" and "Police"
+    if not enemyTeam then return nil end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = player.Character and {player.Character} or {}
+    params.IgnoreWater = true
+    local best, bestDot = nil, math.cos(math.rad(12))
+    local forward = direction.Unit
+    for _, candidate in ipairs(Players:GetPlayers()) do
+        if candidate ~= player and candidate.Team and candidate.Team.Name == enemyTeam then
+            local character = candidate.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if humanoid and humanoid.Health > 0 and root then
+                local delta = root.Position - origin
+                if delta.Magnitude > 0.01 and delta.Magnitude <= 450 then
+                    local dot = forward:Dot(delta.Unit)
+                    if dot > bestDot then
+                        local hit = workspace:Raycast(origin, delta, params)
+                        if not hit or hit.Instance:IsDescendantOf(character) then
+                            best, bestDot = delta.Unit * direction.Magnitude, dot
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+function state:SetEnabled(enabled)
+    if self.Destroyed or self.Enabled == enabled then return end
+    if enabled then
+        assert(type(emitter.Emit) == "function" and not table.isfrozen(emitter), "Jailbreak emitter unavailable")
+        original = emitter.Emit
+        local nextEmit = original
+        wrapper = function(selfEmitter, origin, direction, ...)
+            if state.Enabled and selfEmitter.Local == true and typeof(origin) == "Vector3"
+                and typeof(direction) == "Vector3" and direction.Magnitude > 0.01 then
+                direction = targetDirection(origin, direction) or direction
+            end
+            return nextEmit(selfEmitter, origin, direction, ...)
+        end
+        emitter.Emit = wrapper
+    elseif emitter.Emit == wrapper then
+        emitter.Emit = original
+    end
+    self.Enabled = enabled
+end
+
+function state:GetSnapshot()
+    return {Enabled = self.Enabled, Status = self.Enabled and "Jailbreak projectile adapter active" or "Off"}
+end
+
+function state:Destroy()
+    self:SetEnabled(false)
+    self.Destroyed = true
+end
+
+return state
+]====],
 RLGL=[====[
 -- Ink Game Red Light, Green Light: automatic stopping on red only.
 -- Read-only light events; no outgoing remotes, raw keypresses or map indexing.
@@ -20546,10 +20618,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r45",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-06-r46",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r45 · all features OFF."
+local note="Build r46 · Jailbreak Silent Aim · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -20578,6 +20650,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="silentaim",Section="Jailbreak",Category="Aim",Name="Silent Aim",Subtitle="Jailbreak projectile adapter",Game=245662005,Source="SilentAim"},
     {Id="sky_safeplatforms",Section="Sky Fighters",Category="Movement",Name="Safe Platforms",Subtitle="Whole-arena solid stud floor · partly transparent",Game=8366716517,Key="__ALLEN_SKY_safeplatforms",Source="SkyPlatforms"},
     {Id="sky_antifall",Section="Sky Fighters",Category="Movement",Name="Anti Fall",Subtitle="Returns to recently verified safe ground",Game=8366716517,Key="__ALLEN_SKY_antifall",Source="SkyProtection"},
     {Id="match_dodgeitem",Section="Sky Fighters",Category="Combat",Name="Auto Dodge",Subtitle="Flowstate Dodge item · native cooldowns",Game=8366716517,Key="__ALLEN_MATCH_dodgeitem",Source="Match",Mode="dodgeitem"},
