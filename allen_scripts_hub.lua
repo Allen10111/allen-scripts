@@ -16092,24 +16092,31 @@ if env.__ALLEN_HNS_dodge then env.__ALLEN_HNS_dodge:Destroy()end
 local S={HubOnly=true,Enabled=false,Destroyed=false,Actions=0,Attempts=0,Status="Off",MaxStepMs=0,Generation=0}
 local animationIds={}
 local abilities=RS:FindFirstChild("Animations");abilities=abilities and abilities:FindFirstChild("Abilities")
-local knife=abilities and abilities:FindFirstChild("Knife")
-if knife then for _,v in ipairs(knife:GetChildren())do
-    local name=v.Name:lower()
-    if v:IsA("Animation")and name:find("swing",1,true)and not name:find("victim",1,true)then
-        local id=v.AnimationId:match("%d+")
-        if id then animationIds[id]={Kind="Knife",Range=name:find("lunge",1,true)and 14 or 8}end
+local function bindAttacks(folderName,kind,attacks)
+    local folder=abilities and abilities:FindFirstChild(folderName)
+    if not folder then return end
+    for name,profile in pairs(attacks)do
+        local animation=folder:FindFirstChild(name)
+        local id=animation and animation:IsA("Animation")and animation.AnimationId:match("%d+")
+        if id then
+            profile.Kind=kind
+            animationIds[id]=profile
+        end
     end
-end end
--- SharedFunctions maps Weak Fists to FightBack, which also contains non-punch assets.
--- Explicit whitelist avoids victim, clash, QTE and pole animations in the same folder.
-local weakNames={Punch1=true,Punch2=true,Punch3=true,AttemptToPunchBack=true}
-local fightBack=abilities and abilities:FindFirstChild("FightBack")
-if fightBack then for _,v in ipairs(fightBack:GetChildren())do
-    if v:IsA("Animation")and weakNames[v.Name]then
-        local id=v.AnimationId:match("%d+")
-        if id then animationIds[id]={Kind="Weak Fists",Range=6}end
-    end
-end end
+end
+-- Damage-window estimates shared with Weapon Auto Dash. Only bind initiating attacks.
+bindAttacks("Knife","Knife",{
+    KnifeSwing1={Range=8,ActiveStart=.105,ActiveEnd=.295},
+    KnifeSwing2={Range=8,ActiveStart=.11,ActiveEnd=.305},
+    KnifeSwing1Lunge={Range=14,ActiveStart=.14,ActiveEnd=.455},
+    KnifeSwingBackstab={Range=8,ActiveStart=.18,ActiveEnd=.52},
+})
+bindAttacks("FightBack","Weak Fists",{
+    Punch1={Range=6,ActiveStart=.075,ActiveEnd=.64},
+    Punch2={Range=6,ActiveStart=.075,ActiveEnd=.66},
+    Punch3={Range=6,ActiveStart=.06,ActiveEnd=.52},
+    AttemptToPunchBack={Range=6,ActiveStart=.08,ActiveEnd=.76},
+})
 local function weaponMatches(c,kind)
     -- The exact FightBack punch IDs identify Weak Fists even when it auto-uses from inventory.
     return kind=="Weak Fists" or c:FindFirstChild("Knife")~=nil
@@ -16119,7 +16126,7 @@ local heartbeat,lastScan,lastAttempt,statusUntil,elapsed=nil,0,-math.huge,0,0
 local function log(...)print("[DODGE ISOLATED]",...)end
 local function live(p)
     local c=p.Character;local h=c and c:FindFirstChildOfClass("Humanoid");local r=c and c:FindFirstChild("HumanoidRootPart")
-    if h and h.Health>0 and r then return c,h,r end
+    if h and h.Health>0 and r and not c:FindFirstChild("Dead")then return c,h,r end
 end
 local function cooldown(c)
     for _,v in ipairs(c:GetChildren())do if not v:IsA("Tool") and (v:GetAttribute("CD")=="DODGE!"or v:GetAttribute("CD")=="Dodge")then return true end end
@@ -16166,7 +16173,11 @@ local function scan()
                         local id=track.Animation and track.Animation.AnimationId:match("%d+")
                         local profile=id and animationIds[id]
                         if profile and weaponMatches(c,profile.Kind)then
-                            threats[p]={Character=c,Track=track,Range=profile.Range,Kind=profile.Kind,Expires=os.clock()+1.2,Attempted=false}
+                            local now=os.clock()
+                            local started=now-track.TimePosition/math.max(track.Speed,.01)
+                            local previous=threats[p]
+                            if previous and previous.Track==track and math.abs(started-previous.Started)<.12 then return end
+                            threats[p]={Character=c,Track=track,Profile=profile,Started=started,Expires=now+1.2,Attempted=false}
                             log("swing",p.Name,profile.Kind,id)
                         end
                     end)}
@@ -16179,15 +16190,16 @@ end
 local DashPolicy=(function()
 local P={}
 local function finite(v)return v==v and math.abs(v)<math.huge end
-function P.Entry(x,y,z,vx,vy,vz,range)
+local function entryBetween(x,y,z,vx,vy,vz,range,near,far,allowApproach)
     if not(finite(x)and finite(y)and finite(z)and finite(vx)and finite(vy)and finite(vz))then return end
-    local near,far=0,.14
     local speed=math.sqrt(vx*vx+vz*vz)
     local inside=math.abs(x)<=4.25 and math.abs(y)<=5.75 and z>=-range-.75 and z<=.75
-    if inside then return 0 end
-    -- Only predict a fast approach, not ordinary distant swings or movement away.
-    if speed<15 or speed>250 or x*vx+z*vz>=0 then return end
-    far=math.min(far,10/speed)
+    if inside and near==0 then return 0 end
+    if not inside then
+        if not allowApproach or speed<15 or speed>250 or x*vx+z*vz>=0 then return end
+        far=math.min(far,10/speed)
+        if near>far then return end
+    end
     local function slab(position,velocity,low,high)
         if math.abs(velocity)<.001 then return position>=low and position<=high end
         local a,b=(low-position)/velocity,(high-position)/velocity
@@ -16197,47 +16209,78 @@ function P.Entry(x,y,z,vx,vy,vz,range)
     end
     if slab(x,vx,-4.25,4.25)and slab(y,vy,-5.75,5.75)and slab(z,vz,-range-.75,.75)then return near end
 end
+function P.Entry(x,y,z,vx,vy,vz,range)
+    return entryBetween(x,y,z,vx,vy,vz,range,0,.14,true)
+end
+
+function P.Contact(x,y,z,vx,vy,vz,range,phase,playbackSpeed,activeStart,activeEnd,attackerClosing)
+    if not finite(phase) or not finite(playbackSpeed) or playbackSpeed<=0 or phase>=activeEnd then return end
+    local near=math.max(0,(activeStart-phase)/playbackSpeed)
+    local far=math.min(.07,(activeEnd-phase)/playbackSpeed)
+    if near>far then return end
+    return entryBetween(x,y,z,vx,vy,vz,range,near,far,finite(attackerClosing) and attackerClosing>=15)
+end
 return P
 
 end)()
-local function hitboxEntry(root,target,range)
-    local point=root.CFrame:PointToObjectSpace(target.Position)
-    local relative=root.CFrame:VectorToObjectSpace(target.AssemblyLinearVelocity-root.AssemblyLinearVelocity)
-    return DashPolicy.Entry(point.X,point.Y,point.Z,relative.X,relative.Y,relative.Z,range)
-end
-local function directedThreat(root,target,range)
+local function stableThreat(root,target,threat,now)
     local offset=target.Position-root.Position
     local flat=Vector3.new(offset.X,0,offset.Z)
-    local facing=Vector3.new(root.CFrame.LookVector.X,0,root.CFrame.LookVector.Z)
-    if flat.Magnitude<.1 or facing.Magnitude<.1 or facing.Unit:Dot(flat.Unit)<.65 then return end
-    local entry=hitboxEntry(root,target,range)
-    if type(entry)=="number" and entry<=.07 then return entry end
+    local frame=root.CFrame
+    local look=frame.LookVector
+    local facing=Vector3.new(look.X,0,look.Z)
+    local gap=threat.LastLookAt and now-threat.LastLookAt or math.huge
+    local turning=threat.LastLook and gap>0
+        and math.acos(math.clamp(look:Dot(threat.LastLook),-1,1))>4.5*gap
+    threat.LastLook,threat.LastLookAt=look,now
+    if gap>.12 or turning then threat.DirectedSince=nil end
+    if turning or flat.Magnitude<.1 or facing.Magnitude<.1 or facing.Unit:Dot(flat.Unit)<.65 then
+        threat.DirectedSince=nil
+        return
+    end
+    -- Track aim during the wind-up so the 50 ms stability check does not delay an imminent hit.
+    threat.DirectedSince=threat.DirectedSince or now
+    if now-threat.DirectedSince<.05 then return end
+    local point=frame:PointToObjectSpace(target.Position)
+    local attackerVelocity=root.AssemblyLinearVelocity
+    local relative=frame:VectorToObjectSpace(target.AssemblyLinearVelocity-attackerVelocity)
+    local profile,track=threat.Profile,threat.Track
+    return DashPolicy.Contact(point.X,point.Y,point.Z,relative.X,relative.Y,relative.Z,
+        profile.Range,track.TimePosition,track.Speed,profile.ActiveStart,profile.ActiveEnd,attackerVelocity:Dot(flat.Unit))
+end
+local lineOfSight=RaycastParams.new()
+lineOfSight.FilterType=Enum.RaycastFilterType.Exclude
+lineOfSight.IgnoreWater=true
+lineOfSight.RespectCanCollide=true
+local function unobstructed(attacker,character,root,target)
+    local excluded={attacker,character}
+    local liveFolder,effects=workspace:FindFirstChild("Live"),workspace:FindFirstChild("Effects")
+    if liveFolder then excluded[#excluded+1]=liveFolder end
+    if effects then excluded[#excluded+1]=effects end
+    lineOfSight.FilterDescendantsInstances=excluded
+    return workspace:Raycast(root.Position,target.Position-root.Position,lineOfSight)==nil
 end
 local function step()
     local now=os.clock()
     if now-lastScan>=.5 then lastScan=now;scan()end
-    local c,h,r=live(LP);if not c then return end
+    local c,_,r=live(LP);if not c then return end
     local bag=LP:FindFirstChildOfClass("Backpack")
     if not(c:FindFirstChild("DODGE!")or bag and bag:FindFirstChild("DODGE!"))then S.Status="DODGE! item required";return end
     if cooldown(c)then if S.PendingInput then S.PendingInput.Observed=true end;S.Status="Native DODGE! cooldown · waiting";return end
     if c:FindFirstChild("Ragdoll")or c:FindFirstChild("Stun")or c:FindFirstChild("DisableTools")then S.Status="Waiting for recovery";return end
+    if S.PendingInput then return end
     if now>statusUntil then S.Status="Watching knife / weak fists + dash approach · one activation per swing"end
     for p,t in pairs(threats)do
-        if now>t.Expires or not t.Track.IsPlaying or p.Character~=t.Character then threats[p]=nil
+        if now>t.Expires or not t.Track.IsPlaying or t.Track.TimePosition>=t.Profile.ActiveEnd or p.Character~=t.Character then threats[p]=nil
         elseif not t.Attempted and now-lastAttempt>=.55 then
             local attacker,_,root=live(p)
-            local entry=attacker and weaponMatches(attacker,t.Kind)and directedThreat(root,r,t.Range)
-            local turning=false
-            if root then
-                local look=root.CFrame.LookVector
-                if t.LastLook and now>t.LastLookAt then
-                    turning=math.acos(math.clamp(look:Dot(t.LastLook),-1,1))/(now-t.LastLookAt)>4.5
-                end
-                t.LastLook=look;t.LastLookAt=now
-            end
-            if type(entry)~="number" or turning then t.DirectedSince=nil
-            elseif not t.DirectedSince then t.DirectedSince=now end
-            if type(entry)=="number" and not turning and t.DirectedSince and now-t.DirectedSince>=.05 then
+            if not attacker or not weaponMatches(attacker,t.Profile.Kind)then
+                t.DirectedSince=nil
+            elseif stableThreat(root,r,t,now)==nil then
+                continue
+            elseif not unobstructed(attacker,c,root,r)then
+                t.DirectedSince=nil
+            else
                 if UIS:GetFocusedTextBox()then S.Status="Close text input to dodge";return end
                 local handler,reason=slotHandler()
                 if not handler then S.Status=reason or "Native hotbar handler unavailable";return end
@@ -16245,16 +16288,24 @@ local function step()
                 local generation=S.Generation
                 local attempt={Observed=false};S.PendingInput=attempt
                 task.spawn(function()
-                    if not S.Enabled or generation~=S.Generation or LP.Character~=c then return end
-                    if threats[p]~=t or t.Attempted or not t.Track.IsPlaying or p.Character~=attacker
-                        or not root.Parent or not r.Parent or cooldown(c)
-                        or type(directedThreat(root,r,t.Range))~="number"then
+                    if generation~=S.Generation or S.PendingInput~=attempt then return end
+                    local characterNow,_,localRootNow=live(LP)
+                    local attackerNow,_,attackerRootNow=live(p)
+                    local currentEntry
+                    if S.Enabled and characterNow==c and localRootNow==r and threats[p]==t
+                        and not t.Attempted and t.Track.IsPlaying and attackerNow==attacker
+                        and attackerRootNow==root and weaponMatches(attacker,t.Profile.Kind)
+                        and not cooldown(c) and not UIS:GetFocusedTextBox()
+                        and not(c:FindFirstChild("Ragdoll")or c:FindFirstChild("Stun")or c:FindFirstChild("DisableTools"))then
+                        currentEntry=stableThreat(root,r,t,os.clock())
+                    end
+                    if type(currentEntry)~="number" or not unobstructed(attacker,c,root,r)then
                         t.DirectedSince=nil
                         if S.PendingInput==attempt then S.PendingInput=nil end
                         return
                     end
                     t.Attempted=true;lastAttempt=os.clock();S.Attempts+=1;statusUntil=lastAttempt+2
-                    log("confirmed directed swing; native button attempt",S.Attempts,"ETA",entry)
+                    log("confirmed directed swing; native button attempt",S.Attempts,"ETA",currentEntry,"phase",t.Track.TimePosition)
                     local ok,err=pcall(handler)
                     if not ok then
                         log("native button error",tostring(err));S:SetEnabled(false);S.Status="Native hotbar handler failed";return
@@ -16273,6 +16324,7 @@ end
 function S:SetEnabled(value)
     if self.Destroyed then return end
     self.Enabled=value==true;self.Generation+=1
+    self.PendingInput=nil
     if heartbeat then heartbeat:Disconnect();heartbeat=nil end
     for _,w in pairs(watches)do w.Connection:Disconnect()end;table.clear(watches);table.clear(threats)
     if not self.Enabled then self.Status="Off";log("OFF");return end
@@ -20999,10 +21051,10 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-06-r51",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-07-r52",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
 local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r51 · all features OFF."
+local note="Build r52 · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
