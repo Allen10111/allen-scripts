@@ -932,7 +932,7 @@ assert(check,"Native input handler unavailable")
 local layout=debug.getupvalues(check)
 local good=layout[6]
 assert(type(good)=="function","Native note handler unavailable")
-local heldNotes,receptors
+local heldHandler
 for _,candidate in ipairs(getgc(true))do
     if type(candidate)=="function"then
         local ok,constants=pcall(debug.getconstants,candidate)
@@ -944,14 +944,14 @@ for _,candidate in ipairs(getgc(true))do
             if found.MustPress and found.shouldPress and found.IsSusEnd and found.CanBeHit and found.GoodHit then
                 local values=debug.getupvalues(candidate)
                 if type(values[2])=="table"and type(values[4])=="table"and type(values[6])=="function"and values[5]==conductor then
-                    heldNotes,receptors=values[2],values[4]
+                    heldHandler=candidate
                     break
                 end
             end
         end
     end
 end
-assert(type(heldNotes)=="table"and type(receptors)=="table","Native sustain queue unavailable")
+assert(type(heldHandler)=="function","Native sustain queue unavailable")
 local state={HubOnly=true,Enabled=false,Destroyed=false,Hits=0,Holds=0,Errors=0,Skipped=0,Held={},Status="Off",Seen=setmetatable({},{__mode="k"})}
 local function call(fn,...)
     local gi=getthreadidentity or getidentity;local si=setthreadidentity or setidentity
@@ -1002,6 +1002,9 @@ function state:UpdateHold(note,receptor)
 end
 function state:Step(dt)
     if not debug.getupvalues(began)[1] or not ui.Enabled then self:Release();self.Status="Waiting for song";return end
+    local heldLayout=debug.getupvalues(heldHandler)
+    local heldNotes,receptors=heldLayout[2],heldLayout[4]
+    if type(heldNotes)~="table"or type(receptors)~="table"then error("Native sustain queue changed")end
     local now=conductor.SongPos
     if type(now)~="number"or now~=now then return end
     local due={};local scanned=0
