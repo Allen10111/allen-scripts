@@ -917,9 +917,6 @@ if env.__FNP_AUTOPLAY then env.__FNP_AUTOPLAY:Destroy()end
 local LP=game:GetService("Players").LocalPlayer
 local ui=LP:WaitForChild("PlayerGui"):WaitForChild("GameUI",10)
 assert(ui and ui:FindFirstChild("GameHandler"),"Game engine not ready")
-local handler=require(ui.GameHandler)
-local native=getfenv(handler.genSong)
-local good=native.Goodhit
 local modules=game.ReplicatedStorage.Modules
 local conductor=require(modules.Conductor)
 local inputs=require(modules.UserInputBindables)
@@ -931,9 +928,10 @@ for _,c in ipairs(getconnections(inputs.InputEvents.Began))do
         if type(candidate)=="function" and debug.info(candidate,"n")=="CheckInput"then began=f;check=candidate;break end
     end
 end
-assert(type(good)=="function" and check,"Native note handlers unavailable")
+assert(check,"Native input handler unavailable")
 local layout=debug.getupvalues(check)
-assert(type(layout[4])=="table" and type(layout[5])=="table" and type(layout[7])=="table","Unsupported lane engine layout")
+local good=layout[6]
+assert(type(good)=="function" and type(layout[4])=="table" and type(layout[5])=="table" and type(layout[7])=="table","Unsupported lane engine layout")
 local state={HubOnly=true,Enabled=false,Destroyed=false,Hits=0,Holds=0,Errors=0,Skipped=0,Held={},Status="Off",Seen=setmetatable({},{__mode="k"})}
 local function call(fn,...)
     local gi=getthreadidentity or getidentity;local si=setthreadidentity or setidentity
