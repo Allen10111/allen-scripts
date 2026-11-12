@@ -942,9 +942,13 @@ local function call(fn,...)
     if si and identity then si(identity)end
     if not ok then error(err,0)end
 end
+local function release(receptor)
+    receptor.Holding=false
+    call(receptor.PlayAnimation,receptor,"static")
+end
 function state:Release()
     for receptor in pairs(self.Held)do
-        pcall(function()receptor.Holding=false;call(receptor.PlayAnimation,receptor,"static")end)
+        pcall(release,receptor)
     end
     table.clear(self.Held)
 end
@@ -960,6 +964,23 @@ function state:Destroy()
     self:SetEnabled(false);self.Destroyed=true
     if self.Connection then self.Connection:Disconnect()end
     if env.__FNP_AUTOPLAY==self then env.__FNP_AUTOPLAY=nil end
+end
+function state:UpdateHold(note,receptor)
+    if note.IsSustain and not note.IsSusEnd then
+        self.Held[receptor]=true
+        receptor.Holding=true
+        self.Holds+=1
+        return
+    end
+    if note.IsSusEnd then
+        self.Held[receptor]=nil
+        release(receptor)
+        return
+    end
+    if not self.Held[receptor] then
+        release(receptor)
+    end
+    self.Hits+=1
 end
 function state:Step(dt)
     if not debug.getupvalues(began)[1] or not ui.Enabled then self:Release();self.Status="Waiting for song";return end
@@ -992,14 +1013,8 @@ function state:Step(dt)
             call(good,note)
             self.Seen[note]=true
             if note.GoodHit then
-                if note.IsSustain then self.Holds+=1 else self.Hits+=1 end
-                self.Held[entry.Receptor]=os.clock()+.10
+                self:UpdateHold(note,entry.Receptor)
             end
-        end
-    end
-    for receptor,untilTime in pairs(self.Held)do
-        if os.clock()>=untilTime then
-            receptor.Holding=false;call(receptor.PlayAnimation,receptor,"static");self.Held[receptor]=nil
         end
     end
     self.Status="Playing · native note timing"
