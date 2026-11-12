@@ -1011,7 +1011,7 @@ function state:Step(dt)
         local lane=type(note)=="table"and type(note.NoteData)=="number"and note.NoteData+1
         local receptor=lane and receptors[lane]
         if not note.Destroyed and not note.GoodHit and note.MustPress and not self.Seen[note] then
-            if note.shouldPress==false or (tonumber(note.HealthLoss)or 0)>0 then
+            if (tonumber(note.HealthLoss)or 0)>0 then
                 self.Seen[note]=true;self.Skipped+=1
             elseif note.CanBeHit and not note.TooLate and receptor and receptor.CanBePressed
                 and type(note.StrumTime)=="number" and note.StrumTime-now<=lead and note.StrumTime-now>=-100 then
