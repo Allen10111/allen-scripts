@@ -911,7 +911,7 @@ return S
 FNP=[====[
 -- Allen Scripts: Friday Night Partying native note scheduler. Hub only.
 assert(game.GameId==10258128048,"Open Friday Night Partying")
-assert(debug and type(debug.getupvalues)=="function" and type(getconnections)=="function","Executor needs getconnections and debug.getupvalues")
+assert(debug and type(debug.getupvalues)=="function" and type(debug.getconstants)=="function" and type(getconnections)=="function" and type(getgc)=="function","Executor needs getgc, getconnections and debug inspection")
 local env=getgenv()
 if env.__FNP_AUTOPLAY then env.__FNP_AUTOPLAY:Destroy()end
 local LP=game:GetService("Players").LocalPlayer
@@ -931,7 +931,27 @@ end
 assert(check,"Native input handler unavailable")
 local layout=debug.getupvalues(check)
 local good=layout[6]
-assert(type(good)=="function" and type(layout[4])=="table" and type(layout[5])=="table" and type(layout[7])=="table","Unsupported lane engine layout")
+assert(type(good)=="function","Native note handler unavailable")
+local heldNotes,receptors
+for _,candidate in ipairs(getgc(true))do
+    if type(candidate)=="function"then
+        local ok,constants=pcall(debug.getconstants,candidate)
+        if ok and type(constants)=="table"then
+            local found={}
+            for _,constant in ipairs(constants)do
+                if constant=="MustPress"or constant=="shouldPress"or constant=="IsSusEnd"or constant=="CanBeHit"or constant=="GoodHit"then found[constant]=true end
+            end
+            if found.MustPress and found.shouldPress and found.IsSusEnd and found.CanBeHit and found.GoodHit then
+                local values=debug.getupvalues(candidate)
+                if type(values[2])=="table"and type(values[4])=="table"and type(values[6])=="function"and values[5]==conductor then
+                    heldNotes,receptors=values[2],values[4]
+                    break
+                end
+            end
+        end
+    end
+end
+assert(type(heldNotes)=="table"and type(receptors)=="table","Native sustain queue unavailable")
 local state={HubOnly=true,Enabled=false,Destroyed=false,Hits=0,Holds=0,Errors=0,Skipped=0,Held={},Status="Off",Seen=setmetatable({},{__mode="k"})}
 local function call(fn,...)
     local gi=getthreadidentity or getidentity;local si=setthreadidentity or setidentity
@@ -982,25 +1002,20 @@ function state:UpdateHold(note,receptor)
 end
 function state:Step(dt)
     if not debug.getupvalues(began)[1] or not ui.Enabled then self:Release();self.Status="Waiting for song";return end
-    local up=debug.getupvalues(check)
-    local heads,receptors,tails=up[4],up[5],up[7]
     local now=conductor.SongPos
     if type(now)~="number"or now~=now then return end
     local due={};local scanned=0
     local lead=math.min(dt*500,8)
-    for _,group in ipairs({heads,tails})do
-        for lane,notes in pairs(group)do
-            local receptor=receptors[lane]
-            for _,note in ipairs(notes)do
-                scanned+=1;if scanned>2048 then error("Active note limit exceeded")end
-                if not note.Destroyed and not note.GoodHit and note.MustPress and not self.Seen[note] then
-                    if note.shouldPress==false or (tonumber(note.HealthLoss)or 0)>0 then
-                        self.Seen[note]=true;self.Skipped+=1
-                    elseif note.CanBeHit and not note.TooLate and receptor and receptor.CanBePressed
-                        and type(note.StrumTime)=="number" and note.StrumTime-now<=lead and note.StrumTime-now>=-100 then
-                        due[#due+1]={Note=note,Receptor=receptor}
-                    end
-                end
+    for _,note in ipairs(heldNotes)do
+        scanned+=1;if scanned>2048 then error("Active note limit exceeded")end
+        local lane=type(note)=="table"and type(note.NoteData)=="number"and note.NoteData+1
+        local receptor=lane and receptors[lane]
+        if not note.Destroyed and not note.GoodHit and note.MustPress and not self.Seen[note] then
+            if note.shouldPress==false or (tonumber(note.HealthLoss)or 0)>0 then
+                self.Seen[note]=true;self.Skipped+=1
+            elseif note.CanBeHit and not note.TooLate and receptor and receptor.CanBePressed
+                and type(note.StrumTime)=="number" and note.StrumTime-now<=lead and note.StrumTime-now>=-100 then
+                due[#due+1]={Note=note,Receptor=receptor}
             end
         end
     end
