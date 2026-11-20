@@ -1,43 +1,3 @@
--- Hajime Rising uses its dedicated console through this same Allen Scripts entry point.
-if game.PlaceId == 123177480308580 then
-    local sourceUrl = "https://raw.githubusercontent.com/Allen10111/allen-scripts/main/hajime_rising.lua"
-    local cacheKey = tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999))
-    local fetched, source = pcall(function()
-        return game:HttpGet(sourceUrl .. "?_=" .. cacheKey)
-    end)
-    if not fetched or type(source) ~= "string" or not source:find("%S") then
-        error("[Allen Scripts] Hajime Rising download failed: " .. tostring(source), 0)
-    end
-    local beginning = source:sub(1, 512):lower():gsub("^%s+", "")
-    if beginning:match("^<!doctype%s+html") or beginning:match("^<html[%s>]") then
-        error("[Allen Scripts] Hajime Rising download returned an HTML page.", 0)
-    end
-    if type(loadstring) ~= "function" then
-        error("[Allen Scripts] This executor does not provide loadstring.", 0)
-    end
-    local run, compileError = loadstring(source, "AllenScripts/HajimeRising")
-    if not run then
-        error("[Allen Scripts] Hajime Rising compilation failed: " .. tostring(compileError), 0)
-    end
-
-    -- Keep the existing windows intact until download and compilation both succeed.
-    local environment = _G
-    if type(getgenv) == "function" then
-        local available, value = pcall(getgenv)
-        if available and type(value) == "table" then environment = value end
-    end
-    local disposed = {}
-    for _, key in ipairs({ "__ALLEN_GENERAL_HUB", "__ALLEN_SCRIPTS_HUB" }) do
-        local previous = environment[key]
-        if type(previous) == "table" and type(previous.Destroy) == "function" and not disposed[previous] then
-            disposed[previous] = true
-            local cleaned, cleanupError = pcall(previous.Destroy, previous)
-            if not cleaned then warn("[Allen Scripts] Previous hub cleanup: " .. tostring(cleanupError)) end
-        end
-    end
-    return run()
-end
-
 -- Allen Scripts general hub. All features start OFF.
 local SOURCES={
 Tug=[====[
@@ -21141,10 +21101,15 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-07-r53",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
-local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139
-local gameName=game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r53 · all features OFF."
+local hub={Version="2026-11-20-r54",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG,HAJIME=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139,10769763567
+if game.GameId==HAJIME then
+    -- Clear a console left by the former automatic route; launching is explicit now.
+    local previous=env.HajimeRisingHub
+    if type(previous)=="table" and type(previous.Unload)=="function" then pcall(previous.Unload) end
+end
+local gameName=game.GameId==HAJIME and "Hajime Rising" or game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
+local note="Build r54 · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -21173,6 +21138,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="hajimeconsole",Section="Hajime Rising",Category="Hajime Rising",Name="Hajime Rising",Subtitle="Dark console · training, punching bags and configuration profiles",Game=HAJIME,Action=true},
     {Id="silentaim",Section="Jailbreak",Category="Aim",Name="Silent Aim",Subtitle="Jailbreak projectile adapter",Game=245662005,Source="SilentAim"},
     {Id="sky_safeplatforms",Section="Sky Fighters",Category="Movement",Name="Safe Platforms",Subtitle="Whole-arena solid stud floor · partly transparent",Game=8366716517,Key="__ALLEN_SKY_safeplatforms",Source="SkyPlatforms"},
     {Id="sky_antifall",Section="Sky Fighters",Category="Movement",Name="Anti Fall",Subtitle="Returns to recently verified safe ground",Game=8366716517,Key="__ALLEN_SKY_antifall",Source="SkyProtection"},
@@ -21256,6 +21222,11 @@ local function snapshot(feature)
     if feature.PCOnly and not UIS.KeyboardEnabled then return {Enabled=false,Status="PC only"} end
     if feature.Unavailable then return {Enabled=false,Status="Unavailable"} end
     if feature.Game and feature.Game~=game.GameId then return {Enabled=false,Status="Open "..feature.Section} end
+    if feature.Id=="hajimeconsole" then
+        local app=hub.HajimeApp
+        local running=type(app)=="table" and app.Alive==true
+        return {Enabled=running,Status=running and "Console running · click to re-execute" or "Click Launch to open the console"}
+    end
     if feature.Id=="ff" then
         if not ffFolder or not ffFolder.Parent then return {Enabled=false,Status="Not loaded"} end
         return {Enabled=ffFolder:GetAttribute("Enabled")==true,Status=ffFolder:GetAttribute("Status") or "Loading engine",
@@ -21278,7 +21249,28 @@ local function change(feature)
     hub.Busy[feature.Id]=true
     task.spawn(function()
         local ok,err=pcall(function()
-            if feature.Id=="ff" then
+            if feature.Id=="hajimeconsole" then
+                local url="https://raw.githubusercontent.com/Allen10111/allen-scripts/main/hajime_rising.lua"
+                local source=game:HttpGet(url.."?_="..tostring(os.time()).."-"..tostring(math.random(100000,999999)))
+                if hub.Destroyed then return end
+                assert(type(source)=="string" and source:find("%S"),"Hajime Rising download was empty")
+                local beginning=source:sub(1,512):lower():gsub("^%s+","")
+                assert(not beginning:match("^<!doctype%s+html") and not beginning:match("^<html[%s>]"),"Hajime Rising download returned an HTML page")
+                assert(type(loadstring)=="function","This executor does not provide loadstring")
+                local run,compileError=loadstring(source,"AllenScripts/HajimeRising")
+                assert(run,"Hajime Rising compilation failed: "..tostring(compileError))
+                if hub.Destroyed then return end
+                local app=run()
+                if hub.Destroyed then
+                    if type(app)=="table" and type(app.Unload)=="function" then pcall(app.Unload) end
+                    return
+                end
+                assert(type(app)=="table" and app.Alive==true and type(app.Set)=="function","Hajime Rising did not initialize")
+                hub.HajimeApp=app
+                app.Set("Visible",true)
+                app.Set("Minimized",false)
+                if app.Gui and hub.Gui then app.Gui.DisplayOrder=hub.Gui.DisplayOrder+10 end
+            elseif feature.Id=="ff" then
                 prepareFF()
                 local deadline=os.clock()+12
                 while not hub.Destroyed and ffFolder.Parent and not ffFolder:GetAttribute("Ready") and not ffFolder:GetAttribute("Error") and os.clock()<deadline do task.wait(.1) end
@@ -21326,7 +21318,10 @@ local function connect(signal,fn)local c=signal:Connect(fn);hub.Connections[#hub
 local gui=create("ScreenGui",{Name="AllenScriptsGeneralHub",ResetOnSpawn=false,IgnoreGuiInset=false,DisplayOrder=1000010},nil)
 pcall(function()gui.ScreenInsets=Enum.ScreenInsets.CoreUISafeInsets end)
 local mounted=false
-if type(gethui)=="function" then mounted=pcall(function()gui.Parent=gethui();assert(gui.Parent)end)end
+if game.GameId==HAJIME then
+    -- CoreGui protection can persist after reparenting on this executor.
+    gui.Parent=LP:WaitForChild("PlayerGui");mounted=true
+elseif type(gethui)=="function" then mounted=pcall(function()gui.Parent=gethui();assert(gui.Parent)end)end
 if not mounted then gui.Parent=LP:WaitForChild("PlayerGui")end
 hub.Gui=gui
 local root=create("Frame",{Name="SafeArea",BackgroundTransparency=1,Size=UDim2.fromScale(1,1)},gui)
@@ -21335,7 +21330,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R25",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R54",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
@@ -21415,10 +21410,12 @@ buildNavigation=function()
     for _,b in ipairs(navButtons)do b:Destroy()end
     table.clear(navButtons);table.clear(sectionButtons)
     local tabs={{"Home","◇"}}
-    if selectedGame=="Ink Game" then
+    if selectedGame=="Hajime Rising" then
+        tabs[#tabs+1]={"Hajime Rising","◇"}
+    elseif selectedGame=="Ink Game" then
         tabs[#tabs+1]={"Red Light","◉"};tabs[#tabs+1]={"Dalgona","◇"};tabs[#tabs+1]={"Glass Bridge","◇"};tabs[#tabs+1]={"Hide & Seek","◇"};tabs[#tabs+1]={"Tug of War","◇"};tabs[#tabs+1]={"Jump Rope","◇"};tabs[#tabs+1]={"Auto QTE","◇"};tabs[#tabs+1]={"Movement","↗"}
     else
-        for _,name in ipairs({"Aim","Movement","Rhythm","Alerts","Combat","Minigames","Utility"})do
+        for _,name in ipairs({"Aim","Movement","Rhythm","Alerts","Combat","Minigames","Utility","Hajime Rising"})do
             local found=false
             for _,f in ipairs(features)do if f.Category==name and (selectedGame=="All" or f.Section==selectedGame)then found=true;break end end
             if found then tabs[#tabs+1]={name,"◇"} end
@@ -21447,6 +21444,11 @@ for index,feature in ipairs(features)do
     toggle:FindFirstChildOfClass("UICorner").CornerRadius=UDim.new(1,0)
     knob:FindFirstChildOfClass("UICorner").CornerRadius=UDim.new(1,0)
     local caption=label(card,"OFF",9);caption.TextXAlignment=Enum.TextXAlignment.Center;caption.TextColor3=C.Muted
+    if feature.Action then
+        toggle.Name="Launch";toggle.Text="Launch";toggle.Font=Enum.Font.GothamMedium;toggle.TextSize=12
+        toggle:FindFirstChildOfClass("UICorner").CornerRadius=UDim.new(0,8)
+        knob.Visible=false;caption.Visible=false
+    end
     hub.Rows[#hub.Rows+1]={Feature=feature,Card=card,Title=name,Description=desc,State=state,Toggle=toggle,Knob=knob,Label=caption}
     if feature.Id=="silentaim" and game.GameId==feature.Game then
         local row=hub.Rows[#hub.Rows]
@@ -21473,10 +21475,17 @@ render=function()
         if row.Card.Visible then n+=1 end
         local q=snapshot(f);local busy=hub.Busy[f.Id]
         local unavailable=f.Unavailable or f.MobileUnsupported and UIS.TouchEnabled or f.PCOnly and not UIS.KeyboardEnabled or f.Game and f.Game~=game.GameId
-        row.Toggle.BackgroundColor3=q.Enabled and C.Accent or C.Line
-        row.Knob.BackgroundColor3=q.Enabled and C.BG or unavailable and C.Muted or C.Text
-        row.Knob.Position=UDim2.fromOffset(q.Enabled and row.OnX or 4,4)
-        row.Label.Text=busy and "…" or unavailable and "N/A" or q.Enabled and "ON" or "OFF"
+        if f.Action then
+            row.Toggle.Text=busy and "Loading…" or unavailable and "Unavailable" or q.Enabled and "Re-execute" or "Launch"
+            row.Toggle.BackgroundColor3=unavailable and C.Line or C.Accent
+            row.Toggle.TextColor3=unavailable and C.Muted or C.BG
+            row.Toggle.AutoButtonColor=not unavailable and not busy
+        else
+            row.Toggle.BackgroundColor3=q.Enabled and C.Accent or C.Line
+            row.Knob.BackgroundColor3=q.Enabled and C.BG or unavailable and C.Muted or C.Text
+            row.Knob.Position=UDim2.fromOffset(q.Enabled and row.OnX or 4,4)
+            row.Label.Text=busy and "…" or unavailable and "N/A" or q.Enabled and "ON" or "OFF"
+        end
         row.Toggle.Active=not unavailable and not busy
         if row.FovValue then row.FovValue.Text="FOV  "..tostring(env.__ALLEN_SILENT_AIM_RADIUS or 150).." px" end
         row.State.Text=busy and "Loading…" or (q.Status or "Off")..(q.Hits and " · "..q.Hits.." hits" or "")
@@ -21548,8 +21557,9 @@ layout=function()
     for _,row in ipairs(hub.Rows)do
         local rh=(compact and 110 or 104)+(row.FovValue and 38 or 0)
         row.Card.Size=UDim2.new(1,-6,0,rh)
-        place(row.Title,14,9,cw-88,compact and 34 or 34);row.Title.TextSize=compact and 14 or 16
-        place(row.Description,14,compact and 45 or 44,cw-90,compact and 30 or 30);row.Description.TextSize=compact and 11 or 12
+        local controlSpace=row.Feature.Action and 142 or 90
+        place(row.Title,14,9,cw-controlSpace,compact and 34 or 34);row.Title.TextSize=compact and 14 or 16
+        place(row.Description,14,compact and 45 or 44,cw-controlSpace,compact and 30 or 30);row.Description.TextSize=compact and 11 or 12
         place(row.State,14,rh-23,cw-28,16)
         if row.FovValue then
             place(row.FovLess,14,rh-61,32,28)
@@ -21557,6 +21567,7 @@ layout=function()
             place(row.FovMore,142,rh-61,32,28)
         end
         local sw,sh=compact and 56 or 48,compact and 44 or 28
+        if row.Feature.Action then sw,sh=110,compact and 44 or 34 end
         place(row.Toggle,cw-sw-12,compact and 43 or 40,sw,sh);place(row.Label,cw-sw-12,17,sw,15)
         row.Knob.Size=UDim2.fromOffset(sh-8,sh-8);row.OnX=sw-sh+4
     end
@@ -21589,12 +21600,21 @@ end)
 connect(UIS.WindowFocusReleased,function()drag=nil end)
 connect(UIS.InputBegan,function(input,processed)
     if processed or UIS:GetFocusedTextBox()then return end
+    local child=hub.HajimeApp
+    if child and child.Alive then
+        local config=child.State and child.State.Config
+        if child.CapturingKey or child.KeyCapturedAt and os.clock()-child.KeyCapturedAt<0.2
+            or config and config.ToggleKey==input.KeyCode.Name then return end
+    end
     if input.KeyCode==Enum.KeyCode.RightShift then window.Visible=not window.Visible
     end
 end)
 function hub:Destroy()
     if self.Destroyed then return end
     self.Destroyed=true
+    local child=self.HajimeApp
+    self.HajimeApp=nil
+    if type(child)=="table" and type(child.Unload)=="function" then pcall(child.Unload) end
     for _,c in ipairs(self.Connections)do c:Disconnect()end
     for _,c in pairs(self.Controllers)do if not c.Destroyed then pcall(c.Destroy,c)end end
     if ffFolder then ffFolder:Destroy();ffFolder=nil end
@@ -21616,6 +21636,7 @@ hub.SelectTab=function(_,name)if sectionButtons[name]then selectedTab=name;searc
 hub.PreviewLayout=function(_,width,height)previewSize=Vector2.new(width,height);previewTouch=true;panelPosition=nil;layout()end
 hub.RestoreLayout=function()previewSize=nil;previewTouch=nil;panelPosition=nil;layout()end
 hub.GetFeatureSnapshot=function(_,id)for _,f in ipairs(features)do if f.Id==id then return snapshot(f)end end end
+hub.LaunchHajime=function()for _,f in ipairs(features)do if f.Id=="hajimeconsole" then change(f);return end end end
 buildNavigation();layout()
 task.defer(layout)
 task.spawn(function()
@@ -21627,3 +21648,6 @@ task.spawn(function()
     end
 end)
 print("[Allen Scripts] Black tabbed hub loaded; features OFF.")
+
+return hub
+
