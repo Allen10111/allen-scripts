@@ -1,3 +1,43 @@
+-- Hajime Rising uses its dedicated console through this same Allen Scripts entry point.
+if game.PlaceId == 123177480308580 then
+    local sourceUrl = "https://raw.githubusercontent.com/Allen10111/allen-scripts/main/hajime_rising.lua"
+    local cacheKey = tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999))
+    local fetched, source = pcall(function()
+        return game:HttpGet(sourceUrl .. "?_=" .. cacheKey)
+    end)
+    if not fetched or type(source) ~= "string" or not source:find("%S") then
+        error("[Allen Scripts] Hajime Rising download failed: " .. tostring(source), 0)
+    end
+    local beginning = source:sub(1, 512):lower():gsub("^%s+", "")
+    if beginning:match("^<!doctype%s+html") or beginning:match("^<html[%s>]") then
+        error("[Allen Scripts] Hajime Rising download returned an HTML page.", 0)
+    end
+    if type(loadstring) ~= "function" then
+        error("[Allen Scripts] This executor does not provide loadstring.", 0)
+    end
+    local run, compileError = loadstring(source, "AllenScripts/HajimeRising")
+    if not run then
+        error("[Allen Scripts] Hajime Rising compilation failed: " .. tostring(compileError), 0)
+    end
+
+    -- Keep the existing windows intact until download and compilation both succeed.
+    local environment = _G
+    if type(getgenv) == "function" then
+        local available, value = pcall(getgenv)
+        if available and type(value) == "table" then environment = value end
+    end
+    local disposed = {}
+    for _, key in ipairs({ "__ALLEN_GENERAL_HUB", "__ALLEN_SCRIPTS_HUB" }) do
+        local previous = environment[key]
+        if type(previous) == "table" and type(previous.Destroy) == "function" and not disposed[previous] then
+            disposed[previous] = true
+            local cleaned, cleanupError = pcall(previous.Destroy, previous)
+            if not cleaned then warn("[Allen Scripts] Previous hub cleanup: " .. tostring(cleanupError)) end
+        end
+    end
+    return run()
+end
+
 -- Allen Scripts general hub. All features start OFF.
 local SOURCES={
 Tug=[====[
