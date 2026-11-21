@@ -153,6 +153,11 @@ do
         StartDelay = 1.2, Jitter = 0.01, AutoRest = true, StaminaLow = 25,
         StaminaResume = 85, EnergyFloor = 10, StopAtGoal = true,
         BagPunchInterval = 0.65, BagAlternate = true,
+        AutoFood = false, AutoBuyFood = false, FoodLow = 35, FoodTarget = 80,
+        FoodItem = "Auto", FoodBudget = 5000,
+        AutoWeave = false, AutoDodge = false, AutoBlock = false,
+        CombatPlayers = true, CombatNPCs = true, CombatReactionDelay = 0.08,
+        CombatThreatRange = 12, CombatStaminaFloor = 20,
         AutoClaim = false, AntiAFK = false, SpeedEnabled = false, WalkSpeed = 16,
         JumpEnabled = false, JumpPower = 50, FOVEnabled = false, FOV = 70,
         Accent = "#6366F1", ToggleKey = "RightShift", Visible = true, Minimized = false,
@@ -160,11 +165,13 @@ do
         WorldDestination = "Gym · main floor",
     }
     App.State = { Config = table.clone(App.Defaults), Status = "Ready", LastNotice = "",
-        Started = os.clock(), Reps = 0, Baseline = {}, Recovering = false, NextStart = 0 }
+        Started = os.clock(), Reps = 0, Baseline = {}, Recovering = false, NextStart = 0, CombatStatus = "Off" }
     local ranges = { StartDelay = {0.5,10}, Jitter = {0,0.05}, StaminaLow = {5,80},
         StaminaResume = {20,100}, EnergyFloor = {0,30}, WalkSpeed = {8,40},
-        JumpPower = {20,100}, FOV = {40,100}, WindowX = {0,1}, WindowY = {0,1}, BagPunchInterval = {0.3,2} }
-    local tabs = { Dashboard=true, Training=true, ["World & Quests"]=true,
+        JumpPower = {20,100}, FOV = {40,100}, WindowX = {0,1}, WindowY = {0,1}, BagPunchInterval = {0.3,2},
+        CombatReactionDelay = {0,0.35}, CombatThreatRange = {6,24}, CombatStaminaFloor = {5,70},
+        FoodLow = {5,80}, FoodTarget = {20,100}, FoodBudget = {0,50000} }
+    local tabs = { Dashboard=true, Training=true, Combat=true, ["World & Quests"]=true,
         ["Player & QoL"]=true, ["Configs & Settings"]=true }
     function App.Normalize(raw)
         if type(raw) ~= "table" then return nil, "Configuration must be an object" end
@@ -177,6 +184,7 @@ do
                 if not App.Finite(value) then return nil, "Invalid number: " .. key end
                 local range = ranges[key]
                 value = math.clamp(value, range[1], range[2])
+                if key=="FoodBudget" then value=math.floor(value) end
             elseif type(value) == "string" and #value > 180 then
                 return nil, "Value too long: " .. key
             end
@@ -192,6 +200,13 @@ do
         local validKey, keyCode = pcall(function() return Enum.KeyCode[result.ToggleKey] end)
         if not validKey or not keyCode or keyCode == Enum.KeyCode.Unknown then return nil, "Unknown toggle key" end
         if result.StaminaLow >= result.StaminaResume then return nil, "Recovery threshold must exceed pause threshold" end
+        if result.FoodLow >= result.FoodTarget then return nil, "Food target must exceed the hunger threshold" end
+        if result.FoodItem~="Auto" then
+            local food=App.GameConfig.Foods and App.GameConfig.Foods[result.FoodItem]
+            if type(food)~="table" or not ((tonumber(food.Hunger) or 0)>0 or (tonumber(food.Energy) or 0)>0) then
+                return nil,"Unknown food item"
+            end
+        end
         return result
     end
     function App.Bind(key, callback)
@@ -585,6 +600,7 @@ do
     function App.Travel()
         local target = App.Adapter.World[App.State.Config.WorldDestination]
         if not target then return false, "Destination is not streamed; refresh destinations" end
+        if App.Food then App.Food.Stop("Manual travel") end
         if App.State.Config.TrainingEnabled then App.Set("TrainingEnabled",false) end
         if (App.Player:GetAttribute("TrainingUI") or "") ~= "" then
             return false,"Stop the current activity before travelling"
@@ -745,6 +761,7 @@ do
     end
     function App.CanTrain()
         local config,state=App.State.Config,App.State
+        if App.Food and App.Food.IsBusy() then return false end
         if not config.TrainingEnabled then return false end
         if not config.QTEAssist and config.TrainingMethod~="Punching bags" then state.Status="QTE assistance disabled";return false end
         local character=App.Character()
@@ -888,6 +905,8 @@ do
         end
         if changed.AutoClaim then table.clear(App.QuestAttempts) end
         if changed.SpeedEnabled or changed.JumpEnabled or changed.FOVEnabled then App.StepProperties() end
+        if App.ReconcileCombat then App.ReconcileCombat(changed) end
+        if App.Food then App.Food.Reconcile(changed) end
     end
     function App.GetDashboard()
         local state=App.State
@@ -905,11 +924,15 @@ do
             Thirst=App.Player:GetAttribute("Thirst"),Style=App.Player:GetAttribute("BoxingStyle") or "--",
             Mastery=App.Player:GetAttribute("Stat_Technique_B"),Status=state.Status,Reps=state.Reps,
             Elapsed=elapsed,Rank=App.Player:GetAttribute("RankWillpower"),Executor=App.Executor,
-            ProfileMode=App.ConfigStore.Mode,LastNotice=state.LastNotice }
+            ProfileMode=App.ConfigStore.Mode,LastNotice=state.LastNotice,CombatStatus=state.CombatStatus,
+            Combat=App.GetCombatSnapshot and App.GetCombatSnapshot() or nil,
+            Food=App.Food and App.Food.Snapshot() or nil }
     end
     function App.Unload()
         if not App.Alive then return end
         App.Alive=false
+        if App.Food then App.Food.Destroy() end
+        if App.StopCombat then App.StopCombat() end
         App.StopTraining()
         App.Maid:Cleanup()
         for object,entries in App.Tweens do
@@ -1179,6 +1202,739 @@ do
     Adapter.Refresh()
 end
 
+
+-- Defensive inputs follow server-announced punches and the game's contact geometry.
+do
+    local D = { Threats={}, Owned={}, Native=nil, NextWeave=0, NextDash=0, Errors=0,
+        Weaves=0, Dodges=0, Blocks=0, AcceptedWeaves=0, AcceptedDodges=0, AcceptedBlocks=0,
+        ConfirmedDodges=0, ConfirmedBlocks=0, Status="Off", Serial=0 }
+    App.Defense = D
+    local Policy = {}
+    App.CombatPolicy = Policy
+    local renderName = "AllenHajimeDefense_" .. App.S.HttpService:GenerateGUID(false)
+    local intentBound = false
+    local lastScan = 0
+
+    function Policy.Enabled(config)
+        return config.AutoWeave == true or config.AutoDodge == true or config.AutoBlock == true
+    end
+    function Policy.Entity(isPlayer,isNpc,config)
+        return isPlayer and config.CombatPlayers == true or not isPlayer and isNpc and config.CombatNPCs == true
+    end
+    function Policy.Timing(received,hitTime,scale,reaction)
+        if not App.Finite(received) or not App.Finite(hitTime) or hitTime<=0 then return end
+        scale=App.Finite(scale) and math.clamp(scale,0.4,6) or 1
+        reaction=App.Finite(reaction) and math.clamp(reaction,0,0.4) or 0.08
+        local impact=received+math.clamp(hitTime*scale,0.035,3)
+        return impact,math.max(received+reaction,impact-0.11),impact+0.18
+    end
+    function Policy.Window(threat,now)
+        if now>threat.Expires then return "expired" end
+        if now<threat.ReactAt then return "waiting" end
+        return "ready"
+    end
+    function Policy.CanWeave(punch,zone,weave)
+        return zone=="Head" and type(weave)=="table" and type(weave.SlipAnims)=="table"
+            and weave.SlipAnims[punch.Anim]==true
+    end
+    function Policy.SafeDashDirection(direction,toAttacker)
+        if typeof(direction)~="Vector3" or typeof(toAttacker)~="Vector3" then return false end
+        local a=direction*Vector3.new(1,0,1)
+        local b=toAttacker*Vector3.new(1,0,1)
+        return a.Magnitude>0.1 and b.Magnitude>0.1 and a.Unit:Dot(b.Unit)<0.25
+    end
+    local function status(value)
+        D.Status=value
+        App.State.CombatStatus=value
+    end
+    local function physical(key)
+        if typeof(key)~="EnumItem" then return false end
+        local ok,down=pcall(App.S.UserInputService.IsKeyDown,App.S.UserInputService,key)
+        return ok and down==true
+    end
+    local function finiteAttribute(object,key,now)
+        local value=object:GetAttribute(key)
+        return App.Finite(value) and value>now
+    end
+    local function nativeModules()
+        if D.Native then return true end
+        if D.ModuleFailure then return false end
+        local ok,native=pcall(function()
+            local input=require(App.Boxing:FindFirstChild("BoxingVirtualInput"))
+            local geometry=require(App.Boxing:FindFirstChild("BoxingHitDetection"))
+            local skills=require(App.Boxing:FindFirstChild("BoxingSkills"))
+            assert(type(input)=="table" and type(input.Set)=="function" and type(input.Tap)=="function"
+                and type(input.IsDown)=="function" and type(input.SetIntent)=="function","Input contract unavailable")
+            assert(type(geometry)=="table" and type(geometry.PathFor)=="function"
+                and type(geometry.Contact)=="function","Contact geometry unavailable")
+            assert(type(skills)=="table" and type(skills.Has)=="function","Skill contract unavailable")
+            return {Input=input,Geometry=geometry,Skills=skills}
+        end)
+        if not ok then D.ModuleFailure=tostring(native);status("Native defensive controls unavailable");return false end
+        D.Native=native
+        return true
+    end
+    local function setOwned(key,down)
+        local input=D.Native and D.Native.Input
+        if not input then return false end
+        if down then
+            if input.IsDown(key) then return false end
+            D.Owned[key]=true
+            local ok=pcall(input.Set,key,true)
+            if not ok then D.Owned[key]=nil;return false end
+            return true
+        end
+        if D.Owned[key] then
+            D.Owned[key]=nil
+            pcall(input.Set,key,false)
+        end
+        return true
+    end
+    local function releaseIntent()
+        local input=D.Native and D.Native.Input
+        if D.Intent and input then
+            local _,humanoid=App.Character()
+            local manual=humanoid and humanoid.MoveDirection or Vector3.zero
+            pcall(input.SetIntent,manual)
+        end
+        D.Intent=nil
+        if intentBound then pcall(App.S.RunService.UnbindFromRenderStep,App.S.RunService,renderName);intentBound=false end
+    end
+    local function releaseHeld()
+        -- Release only keys this runtime changed; the game's physical-key path
+        -- remains active and may continue a manually held guard independently.
+        setOwned("HeadBlock",false)
+        setOwned("Block",false)
+        setOwned("Weave",false)
+        releaseIntent()
+        D.Held=nil
+    end
+    local function ownIntent(direction,character)
+        D.Intent=direction
+        if intentBound then return end
+        intentBound=true
+        App.S.RunService:BindToRenderStep(renderName,Enum.RenderPriority.Last.Value+3,function()
+            if not App.Alive or not D.Intent or App.Player.Character~=character or not Policy.Enabled(App.State.Config) then return end
+            local input=D.Native and D.Native.Input
+            if input then pcall(input.SetIntent,D.Intent) end
+        end)
+    end
+    App.Maid:Give(function() releaseHeld() end)
+
+    local function blocked(character,humanoid)
+        if not App.Alive or not Policy.Enabled(App.State.Config) then return "Off" end
+        if App.Food and App.Food.IsBusy() then return "Eating" end
+        if App.Session or App.PendingStart or App.Moving or App.State.Config.TrainingEnabled
+            or (App.Player:GetAttribute("TrainingUI") or "")~="" or character:GetAttribute("Training")~=nil then
+            return "Paused during training or travel"
+        end
+        if humanoid.Health<=0 or humanoid.Sit or humanoid.PlatformStand or character:GetAttribute("Downed")
+            or character:GetAttribute("RingBreak") or character:GetAttribute("ClinchState")
+            or character:GetAttribute("ClinchedBy") then return "Waiting for character recovery" end
+        local now=workspace:GetServerTimeNow()
+        for _,key in {"StunnedUntil","GuardBrokenUntil","FrozenUntil","CounterMissUntil"} do
+            if finiteAttribute(character,key,now) then return "Waiting for character recovery" end
+        end
+        local localNow=os.clock()
+        if finiteAttribute(App.Player,"TechniqueUntil",localNow) then return "Waiting for technique recovery" end
+        local tool=character:FindFirstChildOfClass("Tool")
+        if not tool or tool:GetAttribute("BoxingTool")~=true then return "Equip Boxing gloves" end
+        if App.S.UserInputService:GetFocusedTextBox() then return "Paused while typing" end
+        if App.MenuState then
+            for _,key in {"IsOpen","Blocked"} do
+                if type(App.MenuState[key])=="function" then
+                    local ok,value=pcall(App.MenuState[key])
+                    if not ok or value then return "Paused in game menu" end
+                end
+            end
+        end
+        local percent=App.Stamina()
+        if not percent or percent<App.State.Config.CombatStaminaFloor then return "Saving stamina" end
+    end
+    local function allowedAttacker(attacker)
+        if typeof(attacker)~="Instance" or not attacker:IsA("Model") or not attacker.Parent
+            or attacker==App.Player.Character or attacker:GetAttribute("PunchingBag")==true then return false end
+        local root=attacker:FindFirstChild("HumanoidRootPart")
+        local humanoid=attacker:FindFirstChildOfClass("Humanoid")
+        if not root or not root:IsA("BasePart") or not humanoid or humanoid.Health<=0 then return false end
+        local player=App.S.Players:GetPlayerFromCharacter(attacker)
+        local tags=App.S.CollectionService
+        local npc=tags:HasTag(attacker,"BoxingNPC") or tags:HasTag(attacker,"AIFighter") or tags:HasTag(attacker,"RankedBot")
+        return Policy.Entity(player~=nil,npc,App.State.Config),root
+    end
+    local function contact(threat,character,root,now)
+        local allowed,attackerRoot=allowedAttacker(threat.Attacker)
+        if not allowed then return end
+        local range=App.State.Config.CombatThreatRange
+        if (attackerRoot.Position-root.Position).Magnitude>range then return end
+        local lead=math.clamp(threat.ImpactAt-now,0,0.18)
+        local attackerVelocity=attackerRoot.AssemblyLinearVelocity*Vector3.new(1,0,1)
+        local ownVelocity=root.AssemblyLinearVelocity*Vector3.new(1,0,1)
+        if attackerVelocity.Magnitude>60 then attackerVelocity=Vector3.zero end
+        if ownVelocity.Magnitude>60 then ownVelocity=Vector3.zero end
+        local attackerPose={Root=attackerRoot,CFrame=attackerRoot.CFrame+attackerVelocity*lead}
+        local ownShift=CFrame.new(ownVelocity*lead)
+        local ok,result=pcall(D.Native.Geometry.Contact,attackerPose,threat.Path,character,threat.Zone,false,
+            -0.08,threat.Options,threat.Punch,ownShift)
+        return ok and result or nil,attackerRoot
+    end
+    local function manualGuard(character)
+        local input=D.Native.Input
+        local config=App.GameConfig
+        return physical(config.BlockKey) or physical(config.HeadBlockKey)
+            or input.IsDown("Block") and not D.Owned.Block
+            or input.IsDown("HeadBlock") and not D.Owned.HeadBlock
+            or character:GetAttribute("Blocking")==true and not D.Owned.Block and not D.Owned.HeadBlock
+    end
+    local function checkAcceptance(character,now)
+        local pending=D.PendingAcceptance
+        if not pending then return end
+        if pending.Character~=character or now>pending.Expires then D.PendingAcceptance=nil;return end
+        local accepted=pending.Kind=="Weave" and (App.Player:GetAttribute("WeaveMode")==true or character:GetAttribute("Weaving")~=nil)
+            or pending.Kind=="Dash" and finiteAttribute(App.Player,"DashingUntil",now)
+            or pending.Kind=="Block" and character:GetAttribute("Blocking")==true
+        if accepted then
+            local key=pending.Kind=="Weave" and "AcceptedWeaves" or pending.Kind=="Dash" and "AcceptedDodges" or "AcceptedBlocks"
+            D[key]+=1;D.PendingAcceptance=nil
+        end
+    end
+    local function acted(kind,character,threat,releaseAt)
+        threat.Handled=true
+        D.PendingAcceptance={Kind=kind,Character=character,Expires=os.clock()+0.25}
+        if kind~="Dash" then D.Held={Kind=kind,Character=character,ReleaseAt=releaseAt,Zone=threat.Zone} end
+    end
+    local function tryWeave(threat,character,humanoid,root,now)
+        if not App.State.Config.AutoWeave or now<D.NextWeave or not Policy.CanWeave(threat.Punch,threat.Zone,App.GameConfig.Weave)
+            or manualGuard(character) or physical(App.GameConfig.Weave.Key) or D.Native.Input.IsDown("Weave") then return false end
+        local ok,hasSkill=pcall(D.Native.Skills.Has,App.Player,"Weaving")
+        if not ok or not hasSkill then return false end
+        if finiteAttribute(App.Player,"DashingUntil",now) or finiteAttribute(App.Player,"PunchLockedUntil",now) then return false end
+        ownIntent(-root.CFrame.LookVector*Vector3.new(1,0,1),character)
+        D.Native.Input.SetIntent(D.Intent)
+        if not setOwned("Weave",true) then releaseIntent();return false end
+        D.NextWeave=now+math.max(0.6,tonumber(App.GameConfig.Weave.IframeCooldown) or 1)
+        D.Weaves+=1
+        acted("Weave",character,threat,math.clamp(threat.ImpactAt+0.09,now+0.12,now+0.35))
+        status("Auto Weave input · head attack")
+        return true
+    end
+    local function tryDash(threat,character,humanoid,root,attackerRoot,now)
+        if not App.State.Config.AutoDodge or now<D.NextDash or manualGuard(character)
+            or D.Native.Input.IsDown("Weave") or physical(App.GameConfig.Weave.Key)
+            or App.Player:GetAttribute("WeaveMode")==true then return false end
+        local loadout=App.Player:GetAttribute("Loadout")
+        local ok,value=pcall(App.S.HttpService.JSONDecode,App.S.HttpService,type(loadout)=="string" and loadout or "{}")
+        if not ok or type(value)~="table" or type(value.Dash)~="string" then return false end
+        local settings=App.GameConfig.DashSettings(value.Dash)
+        if type(settings)~="table" or (character:GetAttribute("Stamina") or 0)<(settings.StaminaCost or 12) then return false end
+        local movement=humanoid.MoveDirection*Vector3.new(1,0,1)
+        local stationary=movement.Magnitude<0.1
+        if stationary then
+            local away=(root.Position-attackerRoot.Position)*Vector3.new(1,0,1)
+            if away.Magnitude<0.1 then away=-root.CFrame.LookVector*Vector3.new(1,0,1) end
+            movement=away.Unit
+        elseif not Policy.SafeDashDirection(movement,attackerRoot.Position-root.Position) then return false end
+        local parameters=RaycastParams.new()
+        parameters.FilterType=Enum.RaycastFilterType.Exclude
+        parameters.FilterDescendantsInstances={character,attackerRoot.Parent}
+        parameters.RespectCanCollide=true
+        if workspace:Blockcast(root.CFrame,Vector3.new(1.8,2.8,0.8),movement.Unit*4,parameters) then return false end
+        if stationary then D.Native.Input.SetIntent(movement) end
+        local tapped=pcall(D.Native.Input.Tap,"Dash")
+        if stationary then D.Native.Input.SetIntent(humanoid.MoveDirection) end
+        if not tapped then return false end
+        D.NextDash=now+math.max(0.3,tonumber(settings.Cooldown) or 0.8)
+        D.Dodges+=1;acted("Dash",character,threat)
+        status("Auto Dodge input · native dash")
+        return true
+    end
+    local function tryBlock(threat,character,now)
+        if not App.State.Config.AutoBlock or manualGuard(character) or D.Native.Input.IsDown("Weave")
+            or App.Player:GetAttribute("WeaveMode")==true or (character:GetAttribute("BlockStamina") or 0)<=0 then return false end
+        if finiteAttribute(App.Player,"DashingUntil",now) then return false end
+        if not setOwned("Block",true) then return false end
+        if threat.Zone=="Head" then setOwned("HeadBlock",true) end
+        D.Blocks+=1
+        acted("Block",character,threat,math.clamp(threat.ImpactAt+0.15,now+0.15,now+0.5))
+        status("Auto Block input · "..threat.Zone)
+        return true
+    end
+    function App.OnCombatEvent(action,attacker,punchName,scale,zone,jammed,special)
+        if not App.Alive or not Policy.Enabled(App.State.Config) then return end
+        local character=App.Player.Character
+        if action=="WeaveDodge" or action=="Dodge" or action=="PerfectDodge" then
+            if attacker==character then D.ConfirmedDodges+=1 end
+            return
+        end
+        if action=="Hit" then
+            if attacker==character and zone==true then D.ConfirmedBlocks+=1 end
+            return
+        end
+        if action~="Punch" or not nativeModules() then return end
+        local allowed,root=allowedAttacker(attacker)
+        local _,_,ownRoot=App.Character()
+        if not allowed or not ownRoot or (root.Position-ownRoot.Position).Magnitude>App.State.Config.CombatThreatRange then return end
+        local punch=type(punchName)=="string" and App.GameConfig.Punches[punchName]
+        if type(punch)~="table" or jammed==true then return end
+        zone=type(special)=="table" and special.Zone or zone
+        zone=App.GameConfig.PunchZone(punchName,zone)
+        if zone~="Head" and zone~="Body" then return end
+        local hitTime=punch.HitTime
+        if type(App.GameConfig.PunchAnimation)=="function" then
+            local ok,_,time=pcall(App.GameConfig.PunchAnimation,punchName,zone,attacker)
+            if ok and App.Finite(time) and time>0 then hitTime=time end
+        end
+        local options
+        if type(special)=="table" then
+            if App.Finite(special.HitTime) and special.HitTime>0 then hitTime=special.HitTime end
+            options={AnimId=special.AnimId,Time=special.HitTime,Reach=special.Reach,Points=special.Points}
+        end
+        local received=os.clock()
+        local impact,react,expires=Policy.Timing(received,hitTime,scale,App.State.Config.CombatReactionDelay)
+        if not impact then return end
+        local ok,path=pcall(D.Native.Geometry.PathFor,attacker,punchName,zone,punch,options)
+        if not ok or type(path)~="table" or #path==0 or #path>600 then return end
+        -- Coalesce repeated copies of the same announcement, not distinct combos.
+        for _,previous in D.Threats do
+            if previous.Attacker==attacker and previous.Name==punchName and received-previous.Received<0.04 then return end
+        end
+        D.Serial+=1
+        D.Threats[#D.Threats+1]={Id=D.Serial,Attacker=attacker,Name=punchName,Punch=punch,Path=path,
+            Options=options,Zone=zone,Received=received,ImpactAt=impact,ReactAt=react,Expires=expires}
+        while #D.Threats>24 do table.remove(D.Threats,1) end
+    end
+    function App.StopCombat(reason)
+        releaseHeld()
+        table.clear(D.Threats)
+        D.PendingAcceptance=nil
+        status(reason or "Off")
+    end
+    function App.ReconcileCombat(changed)
+        local relevant=false
+        for _,key in {"AutoWeave","AutoDodge","AutoBlock","CombatPlayers","CombatNPCs","CombatStaminaFloor"} do
+            if changed[key] then relevant=true;break end
+        end
+        if relevant then
+            App.StopCombat(Policy.Enabled(App.State.Config) and "Waiting for incoming punches" or "Off")
+            D.ModuleFailure=nil
+        end
+    end
+    local function step()
+        if not App.Alive then return end
+        local character,humanoid,root=App.Character()
+        local reason=not character and "Waiting for character" or blocked(character,humanoid)
+        if reason then
+            releaseHeld();table.clear(D.Threats);D.PendingAcceptance=nil;status(reason);return
+        end
+        if not nativeModules() then return end
+        local now=os.clock()
+        checkAcceptance(character,now)
+        local held=D.Held
+        if held then
+            local enabled=held.Kind=="Weave" and App.State.Config.AutoWeave or held.Kind=="Block" and App.State.Config.AutoBlock
+            if held.Character~=character or not enabled or now>=held.ReleaseAt then releaseHeld() end
+        end
+        for index=#D.Threats,1,-1 do
+            if Policy.Window(D.Threats[index],now)=="expired" then table.remove(D.Threats,index) end
+        end
+        if D.Held or finiteAttribute(App.Player,"DashingUntil",now) then return end
+        if now-lastScan<0.025 then return end
+        lastScan=now
+        local best,attackerRoot
+        for _,threat in D.Threats do
+            if not threat.Handled and Policy.Window(threat,now)=="ready" and (not best or threat.ImpactAt<best.ImpactAt) then
+                local hit,attackingRoot=contact(threat,character,root,now)
+                if hit then best,attackerRoot=threat,attackingRoot end
+            end
+        end
+        if not best then status("Waiting for incoming punches");return end
+        if tryWeave(best,character,humanoid,root,now) then return end
+        if tryDash(best,character,humanoid,root,attackerRoot,now) then return end
+        tryBlock(best,character,now)
+    end
+    function App.StepCombat()
+        local ok,message=xpcall(step,debug.traceback)
+        if not ok then
+            D.Errors+=1;D.LastError=tostring(message)
+            App.StopCombat("Defense stopped · input error")
+            App.Set("AutoWeave",false);App.Set("AutoDodge",false);App.Set("AutoBlock",false)
+            status("Defense stopped · input error")
+        end
+    end
+    function App.GetCombatSnapshot()
+        return {Status=D.Status,Weaves=D.Weaves,Dodges=D.Dodges,Blocks=D.Blocks,
+            AcceptedWeaves=D.AcceptedWeaves,AcceptedDodges=D.AcceptedDodges,AcceptedBlocks=D.AcceptedBlocks,
+            ConfirmedDodges=D.ConfirmedDodges,ConfirmedBlocks=D.ConfirmedBlocks,Errors=D.Errors,
+            LastError=D.LastError,Threats=#D.Threats,Inputs=D.Weaves+D.Dodges+D.Blocks}
+    end
+end
+
+-- Food identity, nutrition and shop requests come from the native Boxing config.
+-- The verified consume path is Humanoid:EquipTool(food), then food:Activate().
+do
+    local Food={}
+    App.Food=Food
+    local foods=App.GameConfig.Foods or {}
+    local shops=App.GameConfig.Shops or {}
+    local remote=App.Boxing:FindFirstChild("SurvivalRemote")
+    local active,cycle
+    local generation,cooldown=0,0
+    local destroyed=false
+    local status,item,eaten,spent="Off","--",0,0
+    local connections={}
+    local function live() return App.Alive and not destroyed end
+    local function foodInfo(name)
+        local info=type(name)=="string" and foods[name]
+        if type(info)=="table" and ((tonumber(info.Hunger) or 0)>0 or (tonumber(info.Energy) or 0)>0) then return info end
+    end
+    function Food.Options()
+        local result={}
+        for name in foods do if foodInfo(name) then result[#result+1]=name end end
+        table.sort(result);table.insert(result,1,"Auto")
+        return result
+    end
+    local function inventory(name)
+        local selected,total
+        total=0
+        for _,container in {App.Player.Character,App.Player:FindFirstChildOfClass("Backpack")} do
+            if container then for _,tool in container:GetChildren() do
+                if tool:IsA("Tool") and tool:GetAttribute("FoodItem")==name and foodInfo(name) then
+                    local count=tonumber(tool:GetAttribute("Count"))
+                    if count and count>0 then total+=count;selected=selected or tool end
+                end
+            end end
+        end
+        return selected,total
+    end
+    local function owned(tool)
+        local backpack=App.Player:FindFirstChildOfClass("Backpack")
+        local character=App.Player.Character
+        return tool and (character and tool.Parent==character or backpack and tool.Parent==backpack)
+    end
+    local function resource(name)
+        local value=App.Player:GetAttribute(name)
+        return App.Finite(value) and value or nil
+    end
+    local function needs()
+        local config=App.State.Config
+        local hunger,energy=resource("Hunger"),resource("Energy")
+        return hunger and hunger<=config.FoodLow or false,
+            config.EnergyFloor>0 and energy and energy<config.EnergyFloor or false
+    end
+    local function pendingNeeds()
+        if not cycle then return false,false end
+        local hunger,energy=resource("Hunger"),resource("Energy")
+        return cycle.Hunger and (not hunger or hunger<App.State.Config.FoodTarget) or false,
+            cycle.Energy and App.State.Config.EnergyFloor>0 and (not energy or energy<cycle.EnergyGoal) or false
+    end
+    local function nativeBusy(character)
+        local activity=App.Player:GetAttribute("TrainingUI")
+        local training=character and character:GetAttribute("Training")
+        return type(activity)=="string" and activity~="" or training~=nil and training~=false
+    end
+    local function restoreEquipment(record)
+        if not record or not record.Equipped or App.Player.Character~=record.Character then return end
+        local character,humanoid=App.Character()
+        if not character then return end
+        local current=character:FindFirstChildOfClass("Tool")
+        -- A manually selected replacement tool belongs to the player.
+        if current and current~=record.Tool then return end
+        pcall(function()
+            if current==record.Tool then humanoid:UnequipTools() end
+            local backpack=App.Player:FindFirstChildOfClass("Backpack")
+            for _,tool in record.Previous or {} do
+                if backpack and tool.Parent==backpack then humanoid:EquipTool(tool) end
+            end
+        end)
+        record.Equipped=false
+    end
+    local function release(reason,delay)
+        local old=active
+        generation+=1;active=nil
+        if old then
+            if old.Move and App.Moving==old.Move then App.CancelMove() end
+            restoreEquipment(old)
+            App.State.NextStart=math.max(App.State.NextStart or 0,os.clock()+.5)
+            App.State.Status=App.State.Config.TrainingEnabled and "Resuming training" or (reason or "Ready")
+        end
+        if delay then cooldown=math.max(cooldown,os.clock()+delay) end
+        status=reason or "Ready"
+    end
+    function Food.Stop(reason)
+        reason=reason or (App.State.Config.AutoFood and "Waiting for character" or "Off")
+        release(reason,reason=="Manual travel" and 20 or nil)
+    end
+    function Food.IsBusy() return live() and active~=nil end
+    local function current(record)
+        local character=App.Character()
+        return live() and App.State.Config.AutoFood and active==record and record.Generation==generation
+            and character==record.Character
+    end
+    local function useful(name,hungerNeed,energyNeed)
+        local info=foodInfo(name)
+        if not info then return false end
+        if hungerNeed and (tonumber(info.Hunger) or 0)<=0 then return false end
+        if not hungerNeed and energyNeed and (tonumber(info.Energy) or 0)<=0 then return false end
+        return true
+    end
+    local function choices(hungerNeed,energyNeed)
+        local selected=App.State.Config.FoodItem
+        if selected~="Auto" then return useful(selected,hungerNeed,energyNeed) and {selected} or {} end
+        local result={}
+        local preferred=hungerNeed and "Tomato" or "Energy Drink"
+        if useful(preferred,hungerNeed,energyNeed) then result[#result+1]=preferred end
+        if preferred~="Tomato" and useful("Tomato",hungerNeed,energyNeed) then result[#result+1]="Tomato" end
+        for _,name in Food.Options() do
+            local info=foodInfo(name)
+            if name~=preferred and name~="Tomato" and info and (tonumber(info.Stamina) or 0)>=0
+                and useful(name,hungerNeed,energyNeed) then result[#result+1]=name end
+        end
+        return result
+    end
+    local function promptPosition(prompt)
+        local parent=prompt.Parent
+        if parent and parent:IsA("Attachment") then return parent.WorldPosition end
+        if parent and parent:IsA("BasePart") then return parent.Position end
+    end
+    local function shopFor(name,root)
+        local counters=workspace:FindFirstChild("ShopCounters")
+        if not counters then return end
+        local best,distance
+        for _,prompt in counters:QueryDescendants("ProximityPrompt[$ShopId]") do
+            if not prompt.Enabled then continue end
+            local id=prompt:GetAttribute("ShopId")
+            local config=type(id)=="string" and type(shops.List)=="table" and shops.List[id]
+            local position=promptPosition(prompt)
+            if type(config)=="table" and type(config.Items)=="table" and position then
+                for _,entry in config.Items do
+                    if type(entry)=="table" and entry[1]==name and App.Finite(entry[2]) and entry[2]>=0 then
+                        local delta=(root.Position-position).Magnitude
+                        if not distance or delta<distance then
+                            best={Id=id,Name=name,Price=entry[2],Prompt=prompt,Position=position,
+                                Range=math.min(tonumber(shops.InteractDistance) or 8,prompt.MaxActivationDistance)}
+                            distance=delta
+                        end
+                    end
+                end
+            end
+        end
+        return best,distance
+    end
+    local function pick(hungerNeed,energyNeed,root)
+        local available=choices(hungerNeed,energyNeed)
+        for _,name in available do
+            local tool=inventory(name)
+            if tool then return {Name=name,Tool=tool} end
+        end
+        if #available==0 then return nil,"Selected food does not restore the needed resource" end
+        if not App.State.Config.AutoBuyFood then return nil,"Out of food · Auto Buy is off" end
+        local cash=resource("Cash")
+        if not cash then return nil,"Waiting for cash data" end
+        local budget=(cycle and cycle.Spent or 0)
+        local failed="No matching food shop is loaded"
+        for _,name in available do
+            local shop,distance=shopFor(name,root)
+            if shop then
+                if shop.Price+budget>App.State.Config.FoodBudget then failed="Refill budget reached · buy food manually or raise the budget"
+                elseif shop.Price>cash then failed="Not enough cash for "..name
+                elseif not App.State.Config.AutoMove and distance>shop.Range then failed="Move closer to a food shop or enable Auto Move"
+                else return {Name=name,Shop=shop} end
+            end
+        end
+        return nil,failed
+    end
+    local function acknowledge(pending)
+        if pending.Counted then return end
+        pending.Counted=true;spent+=pending.Price
+    end
+    local function pollPurchase(now)
+        local pending=cycle and cycle.Pending
+        if not pending then return end
+        if pending.Result==false then
+            if not pending.Refunded then cycle.Spent=math.max(0,cycle.Spent-pending.Price);pending.Refunded=true end
+            cycle.Pending=nil
+            return "rejected",pending.Message or "Food purchase rejected"
+        end
+        local _,count=inventory(pending.Name)
+        if count>pending.BeforeCount then
+            local cash=resource("Cash")
+            if pending.Result==true or cash and pending.BeforeCash-cash>=pending.Price then acknowledge(pending) end
+            cycle.Pending=nil
+            return "delivered"
+        end
+        if pending.Result==true then acknowledge(pending) end
+        if now-pending.Sent>8 then return "unknown","Waiting for purchased "..pending.Name.." · no duplicate request sent" end
+        return "waiting"
+    end
+    if remote and remote:IsA("RemoteEvent") then
+        connections[#connections+1]=remote.OnClientEvent:Connect(function(action,ok,message,name)
+            local pending=cycle and cycle.Pending
+            if destroyed or action~="BuyResult" or not pending or name~=pending.Name or type(ok)~="boolean" then return end
+            pending.Result=ok;pending.Message=tostring(message or "")
+            if ok then acknowledge(pending) end
+        end)
+    end
+    local function begin(plan,character,now)
+        -- Preserve the toggle while releasing only this hub's training/input work.
+        App.StopTraining("Preparing food")
+        if App.StopCombat then App.StopCombat() end
+        generation+=1
+        local previous={}
+        for _,tool in character:GetChildren() do if tool:IsA("Tool") then previous[#previous+1]=tool end end
+        active={Generation=generation,Character=character,Stage="WaitTraining",Deadline=now+9,
+            Plan=plan,Previous=previous,NextEat=now}
+        item=plan.Name;status="Pausing training for food"
+    end
+    function Food.Step(now)
+        if not live() then return false end
+        now=now or os.clock()
+        local config=App.State.Config
+        local hungerNeed,energyNeed=pendingNeeds()
+        if cycle and not hungerNeed and not energyNeed and not (active and active.Stage=="Eating") then
+            release("Food target reached");cycle=nil
+        end
+        if not config.AutoFood then
+            if active then release("Off") end
+            status="Off";return false
+        end
+        local character,humanoid,root=App.Character()
+        if not character or App.Player:GetAttribute("GameLoaded")~=true then
+            if active then release("Waiting for character") end
+            status="Waiting for character";return false
+        end
+        local purchase,message=pollPurchase(now)
+        if purchase=="rejected" then release(message,10);return false end
+        if purchase=="unknown" then release(message,10);return false end
+        if not cycle then
+            local lowHunger,lowEnergy=needs()
+            if not lowHunger and not lowEnergy then status="Monitoring hunger and energy";return false end
+            if not resource("Hunger") or not resource("Energy") then status="Waiting for survival data";return false end
+            cycle={Hunger=lowHunger,Energy=lowEnergy,EnergyGoal=math.min(100,math.max(config.EnergyFloor+5,20)),Spent=0}
+        end
+        hungerNeed,energyNeed=pendingNeeds()
+        if active and not current(active) then release("Food interrupted",3);return false end
+        if now<cooldown and not active then return false end
+        if not active then
+            if cycle.Pending then status="Waiting for purchased "..cycle.Pending.Name;return false end
+            local training=App.Session and App.Session.Owned or App.PendingStart and not App.PendingStart.Canceled
+            if App.Moving and not training then status="Waiting for current travel";return false end
+            if nativeBusy(character) and not training then status="Finish the manual activity before Auto Food";return false end
+            local plan,reason=pick(hungerNeed,energyNeed,root)
+            if not plan then status=reason;cooldown=now+1;return false end
+            begin(plan,character,now)
+            return true
+        end
+        local record=active
+        App.State.Status=status
+        if record.Stage=="WaitTraining" then
+            if nativeBusy(character) or App.AwaitingEnd and now<App.AwaitingEnd then
+                if now>=record.Deadline then release("Waiting for the training session to end",5);return false end
+                return true
+            end
+            record.Stage="Choose"
+        end
+        if record.Stage=="Choose" then
+            if now<record.NextEat then return true end
+            local plan,reason=pick(hungerNeed,energyNeed,root)
+            if not plan then release(reason,3);return false end
+            record.Plan=plan;item=plan.Name
+            if plan.Tool then
+                record.Tool=plan.Tool
+                if not owned(record.Tool) then release("Food no longer in inventory",3);return false end
+                local equipped=pcall(humanoid.EquipTool,humanoid,record.Tool)
+                if not equipped then release("Unable to equip food",5);return false end
+                record.Equipped=true;record.Stage="Equip";record.ReadyAt=now+.25
+                status="Preparing "..plan.Name
+            else
+                record.Shop=plan.Shop
+                local distance=(root.Position-plan.Shop.Position).Magnitude
+                if distance<=plan.Shop.Range then record.Stage="Buy"
+                else
+                    record.Stage="Travel";status="Travelling to buy "..plan.Name
+                    local started=App.Move({Position=plan.Shop.Position},function(arrived)
+                        if not current(record) then return end
+                        record.Arrived=arrived;record.Stage=arrived and "Buy" or "RouteFailed"
+                    end)
+                    record.Move=App.Moving
+                    if not started then release("Unable to reach the food shop",10);return false end
+                end
+            end
+            return true
+        end
+        if record.Stage=="RouteFailed" then release("Food shop route failed",10);return false end
+        if record.Stage=="Travel" then
+            if not record.Move or App.Moving~=record.Move then release("Food route interrupted · retrying later",3);return false end
+            return true
+        end
+        if record.Stage=="Buy" then
+            if not config.AutoBuyFood then release("Auto Buy is off");return false end
+            local shop=record.Shop
+            if not shop.Prompt.Parent or (root.Position-shop.Position).Magnitude>shop.Range then release("Move closer to the food shop",10);return false end
+            if not remote or not remote:IsA("RemoteEvent") then release("Food shop remote unavailable",10);return false end
+            local cash=resource("Cash")
+            if not cash or cash<shop.Price or cycle.Spent+shop.Price>config.FoodBudget then release("Food cash or refill budget limit reached",5);return false end
+            local _,count=inventory(shop.Name)
+            local pending={Name=shop.Name,Price=shop.Price,BeforeCount=count,BeforeCash=cash,Sent=now}
+            cycle.Spent+=shop.Price;cycle.Pending=pending
+            local sent=App.Send(remote,"Buy",shop.Id,shop.Name)
+            if not sent then
+                cycle.Spent=math.max(0,cycle.Spent-shop.Price);cycle.Pending=nil
+                release("Food purchase request unavailable",10);return false
+            end
+            record.Stage="Purchase";status="Buying "..shop.Name
+            return true
+        end
+        if record.Stage=="Purchase" then
+            if not cycle.Pending then record.Stage="Choose";record.NextEat=now+.1 end
+            return true
+        end
+        if record.Stage=="Equip" then
+            if now<record.ReadyAt then return true end
+            if record.Tool.Parent~=character then release("Food equipment changed",5);return false end
+            if nativeBusy(character) then release("Finish the current activity before eating",5);return false end
+            record.Before={Hunger=resource("Hunger"),Energy=resource("Energy"),Count=tonumber(record.Tool:GetAttribute("Count")) or 1}
+            record.Stage="Eating";record.EatDeadline=now+3
+            local activated=pcall(record.Tool.Activate,record.Tool)
+            if not activated then release("Food activation unavailable",10);return false end
+            status="Eating "..record.Plan.Name
+            return true
+        end
+        if record.Stage=="Eating" then
+            local before=record.Before
+            local hunger,energy=resource("Hunger"),resource("Energy")
+            local used=not owned(record.Tool) or (tonumber(record.Tool:GetAttribute("Count")) or 0)<before.Count
+            local restored=hunger and before.Hunger and hunger>before.Hunger or energy and before.Energy and energy>before.Energy
+            if used and restored then
+                eaten+=1;record.Stage="Choose"
+                record.NextEat=now+math.max(tonumber(App.GameConfig.Survival.EatCooldown) or 1,1)+.2
+                status="Ate "..record.Plan.Name
+                return true
+            end
+            if now>=record.EatDeadline then release("Food use was not confirmed · retrying later",15);return false end
+            return true
+        end
+        return true
+    end
+    function Food.Reconcile(changed)
+        if destroyed then return end
+        if changed.AutoFood or changed.AutoBuyFood or changed.FoodLow or changed.FoodTarget
+            or changed.FoodItem or changed.FoodBudget or changed.EnergyFloor or changed.MoveMode or changed.AutoMove then
+            Food.Stop(App.State.Config.AutoFood and "Monitoring hunger and energy" or "Off")
+            if cycle then cycle.EnergyGoal=math.min(100,math.max(App.State.Config.EnergyFloor+5,20)) end
+        end
+    end
+    function Food.Snapshot()
+        return {Status=status,Item=item,Eaten=eaten,Spent=spent,CycleSpent=cycle and cycle.Spent or 0}
+    end
+    function Food.Destroy()
+        if destroyed then return end
+        Food.Stop("Off");destroyed=true
+        for _,connection in connections do connection:Disconnect() end
+        table.clear(connections)
+    end
+    App.Maid:Give(Food.Destroy)
+end
+
 do
     function App.BuildUI()
         local S, Player = App.S, App.Player
@@ -1194,7 +1950,15 @@ do
         local themeCallbacks, tabButtons, pages, fades = {}, {}, {}, setmetatable({}, {__mode = "k"})
         local viewport, gui, main, mainScale, pill, activeIndicator
         local visibilityVersion, pageVersion = 0, 0
-        local pageNames = {"Dashboard", "Training", "World & Quests", "Player & QoL", "Configs & Settings"}
+        local pageNames = {"Dashboard", "Training", "World & Quests", "Combat", "Player & QoL", "Configs & Settings"}
+        local shortNames = {Dashboard="Home",Training="Train",["World & Quests"]="World",["Player & QoL"]="Player",["Configs & Settings"]="Config",Combat="Fight"}
+        local responsiveCallbacks = {}
+        local compact, touchMode, preview, layoutWidth, layoutHeight = false, S.UserInputService.TouchEnabled, nil, 800, 590
+        local refreshLayout, updateVisibility, scrollFocused, navLayout
+        local function responsive(callback)
+            table.insert(responsiveCallbacks,callback)
+            callback()
+        end
 
         local function watch(signal, callback, bucket)
             local connection = signal:Connect(callback)
@@ -1214,12 +1978,15 @@ do
             return create("UIStroke", {Color = color or P.Border, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, object)
         end
         local function text(parent, value, size, color, bold)
-            return create("TextLabel", {
+            local object = create("TextLabel", {
                 BackgroundTransparency = 1, BorderSizePixel = 0, Text = value or "", TextColor3 = color or P.Text,
                 Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham, TextSize = size or 13,
                 TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
                 Size = UDim2.new(1, 0, 0, 22), TextTruncate = Enum.TextTruncate.AtEnd,
             }, parent)
+            object:SetAttribute("BaseTextSize",size or 13)
+            object:SetAttribute("MutedText",color==P.Muted)
+            return object
         end
         local function layout(parent, gap)
             return create("UIListLayout", {Padding = UDim.new(0, gap or 8), SortOrder = Enum.SortOrder.LayoutOrder}, parent)
@@ -1290,9 +2057,10 @@ do
             if callback then watch(button.Activated, function() if App.Alive then callback() end end, bucket) end
         end
         local function action(parent, caption, callback, accent)
-            local button = create("TextButton", {Text = caption, TextSize = 12, Font = Enum.Font.GothamMedium,
+            local button = create("TextButton", {Text = caption, TextSize = 14, Font = Enum.Font.GothamMedium,
                 TextColor3 = P.Text, BackgroundColor3 = P.Control, BorderSizePixel = 0,
-                Size = UDim2.new(1, 0, 0, 36)}, parent)
+                TextWrapped=true, Size = UDim2.new(1, 0, 0, 46)}, parent)
+            button:SetAttribute("ControlType","Action")
             corners(button, 8)
             outline(button)
             interactive(button, callback, nil, accent)
@@ -1314,7 +2082,7 @@ do
             local border = outline(frame)
             pad(frame, 16)
             layout(frame, 9)
-            text(frame, title, 14, P.Text, true)
+            text(frame, title, 16, P.Text, true)
             if subtitle then
                 local description = text(frame, subtitle, 11, P.Muted)
                 description.TextWrapped = true
@@ -1329,10 +2097,15 @@ do
         local function input(parent, placeholder, default)
             local box = create("TextBox", {BackgroundColor3 = P.Control, BorderSizePixel = 0,
                 Text = default or "", PlaceholderText = placeholder or "", PlaceholderColor3 = P.Muted,
-                TextColor3 = P.Text, TextSize = 12, Font = Enum.Font.Gotham,
-                ClearTextOnFocus = false, Size = UDim2.new(1, 0, 0, 36)}, parent)
+                TextColor3 = P.Text, TextSize = 14, Font = Enum.Font.Gotham,
+                ClearTextOnFocus = false, Size = UDim2.new(1, 0, 0, 44)}, parent)
+            box:SetAttribute("ControlType","TextInput")
             corners(box, 8)
             outline(box)
+            watch(box.Focused,function()
+                if refreshLayout then refreshLayout() end
+                App.Maid:Delay(0.22,function() if scrollFocused then scrollFocused(box) end end)
+            end)
             return box
         end
         local function set(key, value)
@@ -1340,108 +2113,155 @@ do
             if ok == false and message then App.Notify(message, "error") end
         end
         local function toggle(parent, caption, key, detail)
-            local frame = row(parent, detail and 51 or 40)
-            local label = text(frame, caption, 12)
-            label.Size = UDim2.new(1, -68, 0, 24)
+            local frame=create("TextButton",{Name="Toggle_"..key,Text="",AutoButtonColor=false,
+                BackgroundTransparency=1,BorderSizePixel=0,Size=UDim2.new(1,0,0,56)},parent)
+            frame:SetAttribute("ControlType","Toggle")
+            frame:SetAttribute("ControlKey",key)
+            local label=text(frame,caption,14)
+            label.Size=UDim2.new(1,-74,0,24)
+            label.TextWrapped=true
+            label.TextTruncate=Enum.TextTruncate.None
+            label.AutomaticSize=Enum.AutomaticSize.Y
+            local sub
             if detail then
-                local sub = text(frame, detail, 10, P.Muted)
-                sub.Position = UDim2.fromOffset(0, 25)
-                sub.Size = UDim2.new(1, -62, 0, 20)
+                sub=text(frame,detail,12,P.Muted)
+                sub.Size=UDim2.new(1,-74,0,18)
+                sub.TextWrapped=true
+                sub.TextTruncate=Enum.TextTruncate.None
+                sub.AutomaticSize=Enum.AutomaticSize.Y
             end
-            local button = create("TextButton", {Text = "", BackgroundColor3 = P.Control, BorderSizePixel = 0,
-                AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0, 20), Size = UDim2.fromOffset(42, 24)}, frame)
-            corners(button, 12)
-            local knob = create("Frame", {BackgroundColor3 = P.Muted, BorderSizePixel = 0,
-                Position = UDim2.fromOffset(3, 3), Size = UDim2.fromOffset(18, 18)}, button)
-            corners(knob, 9)
+            local pill=create("Frame",{BackgroundColor3=P.Control,BorderSizePixel=0,
+                AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,0,0.5,0),Size=UDim2.fromOffset(54,32)},frame)
+            corners(pill,16)
+            local knob=create("Frame",{BackgroundColor3=P.Muted,BorderSizePixel=0,
+                Position=UDim2.fromOffset(4,4),Size=UDim2.fromOffset(24,24)},pill)
+            corners(knob,12)
+            local function fit()
+                local labelHeight=math.max(24,label.TextBounds.Y)
+                if sub then
+                    sub.Position=UDim2.fromOffset(0,labelHeight+4)
+                    frame.Size=UDim2.new(1,0,0,math.max(64,labelHeight+math.max(18,sub.TextBounds.Y)+12))
+                else frame.Size=UDim2.new(1,0,0,math.max(52,labelHeight+12)) end
+            end
             local function update(value)
-                App.Tween(button, {BackgroundColor3 = value and P.Accent or P.Control}, 0.15)
-                App.Tween(knob, {Position = UDim2.fromOffset(value and 21 or 3, 3),
-                    BackgroundColor3 = value and P.Text or P.Muted}, 0.15)
+                App.Tween(pill,{BackgroundColor3=value and P.Accent or P.Control},0.15)
+                App.Tween(knob,{Position=UDim2.fromOffset(value and 26 or 4,4),
+                    BackgroundColor3=value and P.Text or P.Muted},0.15)
             end
-            interactive(button, function() set(key, not C[key]) end, nil, true)
-            watch(button.MouseEnter, function() App.Tween(knob, {BackgroundColor3 = P.Text}, 0.15) end)
-            watch(button.MouseLeave, function() update(C[key]) end)
-            App.Bind(key, update)
-            themed(function() update(C[key]) end)
+            interactive(frame,function()set(key,not C[key])end,nil,true)
+            watch(label:GetPropertyChangedSignal("TextBounds"),fit)
+            if sub then watch(sub:GetPropertyChangedSignal("TextBounds"),fit) end
+            App.Bind(key,update)
+            themed(function()update(C[key])end)
+            responsive(fit)
         end
         local function slider(parent, caption, key, minimum, maximum, step, suffix)
-            local frame = row(parent, 66)
-            local label = text(frame, caption, 12)
-            label.Size = UDim2.new(1, -90, 0, 25)
-            local numeric = input(frame, "", "")
-            numeric.AnchorPoint = Vector2.new(1, 0)
-            numeric.Position = UDim2.fromScale(1, 0)
-            numeric.Size = UDim2.fromOffset(76, 25)
-            local track = create("TextButton", {Text = "", BackgroundColor3 = P.Control, BorderSizePixel = 0,
-                Size = UDim2.new(1, 0, 0, 18), Position = UDim2.fromOffset(0, 37), BackgroundTransparency = 1}, frame)
-            track.AutoButtonColor = false
-            local rail = create("Frame", {BackgroundColor3 = P.Control, BorderSizePixel = 0,
-                AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 5)}, track)
-            corners(rail, 3)
-            local fill = create("Frame", {BackgroundColor3 = P.Accent, BorderSizePixel = 0,
-                Size = UDim2.new(0, 0, 1, 0)}, rail)
-            corners(fill, 3)
-            local glow = create("Frame", {BackgroundColor3 = P.Accent, BackgroundTransparency = 0.8, BorderSizePixel = 0,
-                AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(24, 24)}, track)
-            corners(glow, 12)
-            local handle = create("Frame", {BackgroundColor3 = P.Text, BorderSizePixel = 0,
-                AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(12, 12)}, track)
-            corners(handle, 6)
-            local dragging, dragInput = false, nil
+            local frame=row(parent,100)
+            frame.Name="Slider_"..key
+            frame:SetAttribute("ControlType","Slider")
+            frame:SetAttribute("ControlKey",key)
+            local label=text(frame,caption,14)
+            label.Size=UDim2.new(1,-104,0,44)
+            label.TextWrapped=true
+            label.TextTruncate=Enum.TextTruncate.None
+            local numeric=input(frame,"","")
+            numeric.Name="Value"
+            numeric.AnchorPoint=Vector2.new(1,0)
+            numeric.Position=UDim2.fromScale(1,0)
+            numeric.Size=UDim2.fromOffset(96,44)
+            numeric:SetAttribute("ControlKey",key)
+            local track=create("TextButton",{Name="TouchRail",Text="",BackgroundTransparency=1,BorderSizePixel=0,
+                Size=UDim2.new(1,0,0,44),Position=UDim2.fromOffset(0,50),AutoButtonColor=false},frame)
+            track:SetAttribute("ControlType","SliderTouchRail")
+            track:SetAttribute("ControlKey",key)
+            local rail=create("Frame",{BackgroundColor3=P.Control,BorderSizePixel=0,
+                AnchorPoint=Vector2.new(0,0.5),Position=UDim2.fromScale(0,0.5),Size=UDim2.new(1,0,0,6)},track)
+            corners(rail,3)
+            local fill=create("Frame",{BackgroundColor3=P.Accent,BorderSizePixel=0,Size=UDim2.new(0,0,1,0)},rail)
+            corners(fill,3)
+            local glow=create("Frame",{BackgroundColor3=P.Accent,BackgroundTransparency=0.8,BorderSizePixel=0,
+                AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0,0.5),Size=UDim2.fromOffset(30,30)},track)
+            corners(glow,15)
+            local handle=create("Frame",{BackgroundColor3=P.Text,BorderSizePixel=0,
+                AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0,0.5),Size=UDim2.fromOffset(20,20)},track)
+            corners(handle,10)
+            local dragging,dragInput,startPosition,vertical,lockedScroll,lockedWasEnabled=false,nil,nil,false,nil,true
             local function format(value)
-                if step >= 1 then return string.format("%.0f", value) end
-                if step >= 0.1 then return string.format("%.1f", value) end
-                if step >= 0.01 then return string.format("%.2f", value) end
-                return string.format("%.3f", value)
+                if step>=1 then return string.format("%.0f",value) end
+                if step>=0.1 then return string.format("%.1f",value) end
+                if step>=0.01 then return string.format("%.2f",value) end
+                return string.format("%.3f",value)
             end
             local function update(value)
-                local ratio = math.clamp(((tonumber(value) or minimum) - minimum) / (maximum - minimum), 0, 1)
-                App.Tween(fill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.15)
-                App.Tween(handle, {Position = UDim2.fromScale(ratio, 0.5)}, 0.15)
-                App.Tween(glow, {Position = UDim2.fromScale(ratio, 0.5)}, 0.15)
-                if not numeric:IsFocused() then numeric.Text = format(value) .. (suffix or "") end
+                local ratio=math.clamp(((tonumber(value) or minimum)-minimum)/(maximum-minimum),0,1)
+                App.Tween(fill,{Size=UDim2.new(ratio,0,1,0)},0.15)
+                App.Tween(handle,{Position=UDim2.fromScale(ratio,0.5)},0.15)
+                App.Tween(glow,{Position=UDim2.fromScale(ratio,0.5)},0.15)
+                if not numeric:IsFocused() then numeric.Text=format(value)..(suffix or "") end
             end
             local function fromPosition(position)
-                if track.AbsoluteSize.X <= 0 then return end
-                local ratio = math.clamp((position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
-                local value = minimum + ratio * (maximum - minimum)
-                value = math.clamp(math.floor(value / step + 0.5) * step, minimum, maximum)
-                set(key, value)
+                if track.AbsoluteSize.X<=0 then return end
+                local ratio=math.clamp((position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+                local value=minimum+ratio*(maximum-minimum)
+                set(key,math.clamp(math.floor(value/step+0.5)*step,minimum,maximum))
             end
-            watch(track.InputBegan, function(event)
-                if event.UserInputType == Enum.UserInputType.MouseButton1 or event.UserInputType == Enum.UserInputType.Touch then
-                    dragging, dragInput = true, event
-                    App.Tween(glow, {BackgroundTransparency = 0.55}, 0.15)
-                    fromPosition(event.Position)
+            local function finish()
+                if lockedScroll and lockedScroll.Parent then lockedScroll.ScrollingEnabled=lockedWasEnabled end
+                lockedScroll=nil;dragging=false;dragInput=nil;startPosition=nil;vertical=false
+                App.Tween(glow,{BackgroundTransparency=0.8},0.15)
+            end
+            App.Maid:Give(finish)
+            local function beginDrag()
+                dragging=true
+                lockedScroll=frame:FindFirstAncestorWhichIsA("ScrollingFrame")
+                if lockedScroll then lockedWasEnabled=lockedScroll.ScrollingEnabled;lockedScroll.ScrollingEnabled=false end
+                App.Tween(glow,{BackgroundTransparency=0.55},0.15)
+            end
+            watch(track.InputBegan,function(event)
+                if event.UserInputType~=Enum.UserInputType.MouseButton1 and event.UserInputType~=Enum.UserInputType.Touch then return end
+                finish();dragInput=event;startPosition=event.Position
+                if event.UserInputType==Enum.UserInputType.MouseButton1 then beginDrag();fromPosition(event.Position) end
+            end)
+            watch(S.UserInputService.InputChanged,function(event)
+                if not dragInput or (event~=dragInput and event.UserInputType~=Enum.UserInputType.MouseMovement) then return end
+                if event.UserInputState==Enum.UserInputState.Cancel then finish();return end
+                if not dragging and not vertical then
+                    local delta=event.Position-startPosition
+                    if math.abs(delta.Y)>8 and math.abs(delta.Y)>math.abs(delta.X) then vertical=true
+                    elseif math.abs(delta.X)>8 and math.abs(delta.X)>math.abs(delta.Y) then beginDrag() end
+                end
+                if dragging then fromPosition(event.Position) end
+            end)
+            watch(S.UserInputService.InputEnded,function(event)
+                if not dragInput then return end
+                if event==dragInput or event.UserInputType==Enum.UserInputType.MouseButton1 then
+                    if not dragging and not vertical and startPosition and (event.Position-startPosition).Magnitude<8 then fromPosition(event.Position) end
+                    finish()
                 end
             end)
-            watch(S.UserInputService.InputChanged, function(event)
-                if dragging and (event == dragInput or event.UserInputType == Enum.UserInputType.MouseMovement) then fromPosition(event.Position) end
+            watch(S.UserInputService.WindowFocusReleased,finish)
+            watch(numeric.Focused,function()numeric.Text=format(C[key])end)
+            watch(numeric.FocusLost,function()
+                local value=tonumber(numeric.Text)
+                if value then set(key,math.clamp(math.floor(value/step+0.5)*step,minimum,maximum)) end
+                numeric.Text=format(C[key])..(suffix or "")
             end)
-            watch(S.UserInputService.InputEnded, function(event)
-                if dragging and (event == dragInput or event.UserInputType == Enum.UserInputType.MouseButton1) then
-                    dragging, dragInput = false, nil
-                    App.Tween(glow, {BackgroundTransparency = 0.8}, 0.15)
-                end
-            end)
-            watch(numeric.Focused, function() numeric.Text = format(C[key]) end)
-            watch(numeric.FocusLost, function()
-                local value = tonumber(numeric.Text)
-                if value then set(key, math.clamp(math.floor(value / step + 0.5) * step, minimum, maximum)) end
-                numeric.Text = format(C[key]) .. (suffix or "")
-            end)
-            App.Bind(key, update)
-            themed(function() fill.BackgroundColor3 = P.Accent; glow.BackgroundColor3 = P.Accent end)
+            App.Bind(key,update)
+            themed(function()fill.BackgroundColor3=P.Accent;glow.BackgroundColor3=P.Accent end)
         end
         local function dropdown(parent, caption, key, options)
-            local frame = row(parent, 64)
-            text(frame, caption, 11, P.Muted).Size = UDim2.new(1, 0, 0, 18)
+            local frame = row(parent, 80)
+            frame.Name="Dropdown_"..key
+            frame:SetAttribute("ControlType","Dropdown")
+            frame:SetAttribute("ControlKey",key)
+            text(frame, caption, 12, P.Muted).Size = UDim2.new(1, 0, 0, 22)
             local header = create("TextButton", {Text = "", BackgroundColor3 = P.Control, BorderSizePixel = 0,
-                Position = UDim2.fromOffset(0, 23), Size = UDim2.new(1, 0, 0, 34)}, frame)
+                Name="Open", Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 44)}, frame)
             corners(header, 8)
             outline(header)
-            local valueText = text(header, "", 12)
+            header:SetAttribute("ControlType","DropdownButton")
+            header:SetAttribute("ControlKey",key)
+            local valueText = text(header, "", 14)
             valueText.Position = UDim2.fromOffset(12, 0)
             valueText.Size = UDim2.new(1, -42, 1, 0)
             local chevron = text(header, "+", 17, P.Muted)
@@ -1450,17 +2270,18 @@ do
             chevron.Size = UDim2.new(0, 18, 1, 0)
             chevron.TextXAlignment = Enum.TextXAlignment.Center
             local panel = create("Frame", {BackgroundColor3 = P.Sidebar, BorderSizePixel = 0, ClipsDescendants = true,
-                Position = UDim2.fromOffset(0, 62), Size = UDim2.new(1, 0, 0, 0), Visible = false}, frame)
+                Position = UDim2.fromOffset(0, 76), Size = UDim2.new(1, 0, 0, 0), Visible = false}, frame)
             corners(panel, 8)
             local search = input(panel, "Search...", "")
             search.Position = UDim2.fromOffset(7, 7)
-            search.Size = UDim2.new(1, -14, 0, 28)
+            search.Size = UDim2.new(1, -14, 0, 44)
             local list = create("ScrollingFrame", {BackgroundTransparency = 1, BorderSizePixel = 0,
-                Position = UDim2.fromOffset(7, 41), Size = UDim2.new(1, -14, 1, -48),
+                Position = UDim2.fromOffset(7, 58), Size = UDim2.new(1, -14, 1, -66),
                 CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
                 ScrollBarThickness = 3, ScrollBarImageColor3 = P.Border}, panel)
             layout(list, 4)
             local connections, selectedButtons, opened, revision = {}, {}, false, 0
+            local function panelHeight() return math.clamp(layoutHeight-100,110,220) end
             local function clear()
                 for _, connection in ipairs(connections) do connection:Disconnect() end
                 table.clear(connections)
@@ -1479,7 +2300,7 @@ do
                 opened, revision = false, revision + 1
                 local version = revision
                 chevron.Text = "+"
-                App.Tween(frame, {Size = UDim2.new(1, 0, 0, 64)}, 0.22)
+                App.Tween(frame, {Size = UDim2.new(1, 0, 0, 80)}, 0.22)
                 App.Tween(panel, {Size = UDim2.new(1, 0, 0, 0)}, 0.22)
                 App.Maid:Delay(0.23, function() if revision == version and panel.Parent then panel.Visible = false end end)
             end
@@ -1492,9 +2313,11 @@ do
                     if query == "" or string.find(string.lower(name), query, 1, true) then
                         count = count + 1
                         local choice = create("TextButton", {Text = "  " .. name, TextColor3 = P.Text,
-                            TextXAlignment = Enum.TextXAlignment.Left, Font = Enum.Font.Gotham, TextSize = 11,
+                            TextXAlignment = Enum.TextXAlignment.Left, Font = Enum.Font.Gotham, TextSize = 14, TextWrapped=true, TextTruncate=Enum.TextTruncate.AtEnd,
                             BackgroundColor3 = name == tostring(C[key]) and P.Accent or P.Control, BorderSizePixel = 0,
-                            Size = UDim2.new(1, -4, 0, 29)}, list)
+                            Size = UDim2.new(1, -4, 0, 44)}, list)
+                        choice:SetAttribute("ControlType","DropdownOption")
+                        choice:SetAttribute("ControlKey",key)
                         corners(choice, 6)
                         selectedButtons[choice] = name
                         interactive(choice, function() set(key, name); close() end, connections, true)
@@ -1518,8 +2341,8 @@ do
                 rebuild()
                 panel.Visible = true
                 chevron.Text = "-"
-                App.Tween(frame, {Size = UDim2.new(1, 0, 0, 260)}, 0.22)
-                App.Tween(panel, {Size = UDim2.new(1, 0, 0, 190)}, 0.22)
+                App.Tween(frame, {Size = UDim2.new(1, 0, 0, 80+panelHeight())}, 0.22)
+                App.Tween(panel, {Size = UDim2.new(1, 0, 0, panelHeight())}, 0.22)
             end)
             watch(search:GetPropertyChangedSignal("Text"), function() if opened then rebuild() end end)
             local function update(value)
@@ -1530,6 +2353,10 @@ do
             end
             App.Bind(key, update)
             themed(function() update(C[key]) end)
+            responsive(function()
+                frame.Size=UDim2.new(1,0,0,opened and 80+panelHeight() or 80)
+                panel.Size=UDim2.new(1,0,0,opened and panelHeight() or 0)
+            end)
             return {Refresh = function() update(C[key]); if opened then rebuild() end end, Close = close}
         end
         local function result(ok, message)
@@ -1537,7 +2364,7 @@ do
         end
 
         gui = create("ScreenGui", {Name = "HajimeRisingHub", ResetOnSpawn = false,
-            ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 99999, IgnoreGuiInset = true})
+            ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 99999, IgnoreGuiInset = false})
         local parents = {}
         if type(gethui) == "function" then local ok, value = pcall(gethui); if ok and value then table.insert(parents, value) end end
         local okCore, core = pcall(function() return game:GetService("CoreGui") end)
@@ -1576,11 +2403,12 @@ do
                 -- for the next candidate rather than carrying that protection.
                 pcall(gui.Destroy,gui)
                 gui=create("ScreenGui",{Name="HajimeRisingHub",ResetOnSpawn=false,
-                    ZIndexBehavior=Enum.ZIndexBehavior.Sibling,DisplayOrder=99999,IgnoreGuiInset=true})
+                    ZIndexBehavior=Enum.ZIndexBehavior.Sibling,DisplayOrder=99999,IgnoreGuiInset=false})
             end
         end
         if not parented then gui:Destroy(); error("No writable UI container is available") end
         pcall(function() if type(syn) == "table" and type(syn.protect_gui) == "function" then syn.protect_gui(gui) end end)
+        pcall(function() gui.ScreenInsets=Enum.ScreenInsets.CoreUISafeInsets end)
         App.Maid:Give(gui)
         App.Gui = gui
         local root = create("Frame", {Name = "Viewport", BackgroundTransparency = 1, BorderSizePixel = 0,
@@ -1606,15 +2434,26 @@ do
         local brandSub = text(top, "TRAINING CONSOLE", 9, P.Muted)
         brandSub.Position = UDim2.fromOffset(62, 34)
         brandSub.Size = UDim2.fromOffset(260, 15)
-        local minimize = create("TextButton", {Text = "-", TextSize = 23, TextColor3 = P.Muted,
+        local minimize = create("TextButton", {Name="Minimize",Text = "-", TextSize = 23, TextColor3 = P.Muted,
             Font = Enum.Font.GothamMedium, BorderSizePixel = 0, BackgroundColor3 = P.Control,
             Position = UDim2.new(1, -86, 0, 17), Size = UDim2.fromOffset(28, 28)}, top)
         corners(minimize, 7)
-        local close = create("TextButton", {Text = "x", TextSize = 15, TextColor3 = P.Muted,
+        local close = create("TextButton", {Name="Close",Text = "x", TextSize = 15, TextColor3 = P.Muted,
             Font = Enum.Font.GothamMedium, BorderSizePixel = 0, BackgroundColor3 = P.Control,
             Position = UDim2.new(1, -48, 0, 17), Size = UDim2.fromOffset(28, 28)}, top)
         corners(close, 7)
-        local sidebar = create("Frame", {BackgroundColor3 = P.Sidebar, BorderSizePixel = 0,
+        local keyboardDismiss=create("TextButton",{Name="KeyboardDone",Text="Done",TextSize=14,
+            TextColor3=P.Text,Font=Enum.Font.GothamMedium,BorderSizePixel=0,BackgroundColor3=P.Control,
+            Position=UDim2.new(1,-106,0,6),Size=UDim2.fromOffset(50,44),Visible=false},top)
+        corners(keyboardDismiss,7)
+        keyboardDismiss:SetAttribute("ControlType","HeaderButton")
+        interactive(keyboardDismiss,function()
+            local focused=S.UserInputService:GetFocusedTextBox()
+            if focused then focused:ReleaseFocus() end
+            if preview then preview.KeyboardHeight=0 end
+            if refreshLayout then refreshLayout(true) end
+        end)
+        local sidebar = create("Frame", {Name="Navigation",BackgroundColor3 = P.Sidebar, BorderSizePixel = 0,
             Position = UDim2.fromOffset(0, 62), Size = UDim2.new(0, 179, 1, -105)}, main)
         local nav = create("Frame", {BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 18),
             Size = UDim2.new(1, -24, 0, 260)}, sidebar)
@@ -1626,14 +2465,16 @@ do
         corners(indicatorLine, 2)
         themed(function() activeIndicator.BackgroundColor3 = P.Accent; indicatorLine.BackgroundColor3 = P.Accent end)
         for index, name in ipairs(pageNames) do
-            local button = create("TextButton", {Text = "", BackgroundTransparency = 1, BorderSizePixel = 0,
-                Size = UDim2.new(1, 0, 0, 43), Position = UDim2.fromOffset(0, (index - 1) * 49), ZIndex = 2}, nav)
+            local button = create("TextButton", {Name="Tab_"..name,Text = "", BackgroundTransparency = 1, BorderSizePixel = 0,
+                Size = UDim2.new(1, 0, 0, 44), Position = UDim2.fromOffset(0, (index - 1) * 49), ZIndex = 2}, nav)
             local number = text(button, string.format("%02d", index), 10, P.Muted, true)
             number.Position = UDim2.fromOffset(12, 0)
             number.Size = UDim2.new(0, 25, 1, 0)
             local title = text(button, name, 11, P.Muted)
             title.Position = UDim2.fromOffset(40, 0)
             title.Size = UDim2.new(1, -45, 1, 0)
+            button:SetAttribute("ControlType","Navigation")
+            title:SetAttribute("NavigationText",true)
             tabButtons[name] = {Button = button, Label = title, Number = number, Index = index}
             interactive(button, function() set("ActiveTab", name) end, nil, true)
             watch(button.MouseEnter, function() if C.ActiveTab ~= name then App.Tween(title, {TextColor3 = P.Text}, 0.15) end end)
@@ -1643,7 +2484,7 @@ do
         sideTip.Position = UDim2.new(0, 24, 1, -74)
         sideTip.Size = UDim2.new(1, -40, 0, 50)
         sideTip.TextWrapped = true
-        local content = create("Frame", {BackgroundTransparency = 1, BorderSizePixel = 0,
+        local content = create("Frame", {Name="Pages",BackgroundTransparency = 1, BorderSizePixel = 0,
             Position = UDim2.fromOffset(198, 76), Size = UDim2.new(1, -218, 1, -133), ClipsDescendants = true}, main)
         for _, name in ipairs(pageNames) do
             local page = group(content, {Name = name, BackgroundTransparency = 1,
@@ -1675,7 +2516,7 @@ do
                 local item = toasts[index]
                 if item.Frame.Parent then
                     App.Tween(item.Frame, {Position = UDim2.new(1, 0, 1, -offset)}, 0.22)
-                    offset = offset + 81
+                    offset = offset + 89
                 end
             end
         end
@@ -1696,12 +2537,12 @@ do
             local lifespan = math.clamp(tonumber(duration) or 4, 1, 20)
             local color = kind == "error" and P.Bad or kind == "success" and P.Good or P.Accent
             local frame = group(toastLayer, {Name = "Toast" .. toastSequence, BackgroundColor3 = P.Card,
-                AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 370, 1, 0), Size = UDim2.fromOffset(340, 72), ClipsDescendants = true})
+                AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 370, 1, 0), Size = UDim2.new(1,0,0,80), ClipsDescendants = true})
             corners(frame, 10)
             outline(frame)
             local strip = create("Frame", {BackgroundColor3 = color, BorderSizePixel = 0,
                 Size = UDim2.new(0, 3, 1, 0)}, frame)
-            local label = text(frame, tostring(message), 11, P.Text)
+            local label = text(frame, tostring(message), 14, P.Text)
             label.Position = UDim2.fromOffset(17, 9)
             label.Size = UDim2.new(1, -31, 1, -21)
             label.TextWrapped = true
@@ -1710,13 +2551,14 @@ do
                 Position = UDim2.new(0, 0, 1, -2), Size = UDim2.new(1, 0, 0, 2)}, frame)
             local item = {Frame = frame}
             table.insert(toasts, item)
-            while #toasts > 4 do dismissToast(toasts[1]) end
+            while #toasts > (compact and 2 or 4) do dismissToast(toasts[1]) end
             arrangeToasts()
             App.Tween(progress, {Size = UDim2.new(0, 0, 0, 2)}, lifespan, Enum.EasingStyle.Linear)
             App.Maid:Delay(lifespan, function() dismissToast(item) end)
         end
 
-        local dashboardLabels, statLabels = {}, {}
+        local dashboardLabels, statLabels, ledgerRows = {}, {}, {}
+        local combatStatusLabel
         do
             local page = pages.Dashboard.Scroll
             local overview = card(page, "Live session", "Training signals and character resources update in real time.")
@@ -1748,6 +2590,7 @@ do
                 values.Size = UDim2.new(0.65, 0, 1, 0)
                 values.TextXAlignment = Enum.TextXAlignment.Right
                 statLabels[name] = values
+                ledgerRows[#ledgerRows+1]={Row=line,Label=label,Values=values}
             end
             local controls = card(page, "Quick control")
             toggle(controls, "Auto Train", "TrainingEnabled", "Uses the selected station and training method.")
@@ -1805,7 +2648,37 @@ do
             toggle(quests, "Claim completed quests", "AutoClaim")
         end
         do
+            local page=pages.Combat.Scroll
+            local defense=card(page,"Automatic defense","Choose which defensive actions to use. All actions start off.")
+            toggle(defense,"Auto Weave","AutoWeave")
+            toggle(defense,"Auto Dodge","AutoDodge")
+            toggle(defense,"Auto Block","AutoBlock")
+            combatStatusLabel=text(defense,"Defense is off",12,P.Muted)
+            combatStatusLabel.TextWrapped=true
+            combatStatusLabel.AutomaticSize=Enum.AutomaticSize.Y
+            local threats=card(page,"Threat detection")
+            toggle(threats,"React to players","CombatPlayers")
+            toggle(threats,"React to NPCs","CombatNPCs")
+            slider(threats,"Reaction delay","CombatReactionDelay",0,0.35,0.01,"s")
+            slider(threats,"Threat detection range","CombatThreatRange",6,24,1," studs")
+            slider(threats,"Minimum stamina","CombatStaminaFloor",5,70,1,"%")
+        end
+        local foodStatusLabel,foodLedgerLabel
+        do
             local page = pages["Player & QoL"].Scroll
+            local food = card(page,"Auto Food","Pauses your workout to eat, then resumes it. Also refills energy below the training floor.")
+            toggle(food,"Auto Food","AutoFood","Uses food in your inventory when hunger or energy runs low.")
+            toggle(food,"Auto-buy food","AutoBuyFood","Visits a food counter and spends in-game cash within your refill budget.")
+            dropdown(food,"Food item","FoodItem",function()return App.Food and App.Food.Options() or {"Auto"}end)
+            slider(food,"Eat below hunger","FoodLow",5,80,1,"%")
+            slider(food,"Refill hunger to","FoodTarget",20,100,1,"%")
+            slider(food,"Budget per refill (¥)","FoodBudget",0,50000,500)
+            foodStatusLabel=text(food,"Auto Food off",13,P.Muted)
+            foodLedgerLabel=text(food,"Eaten: 0 · Spent: ¥0",13,P.Muted)
+            for _,label in {foodStatusLabel,foodLedgerLabel} do
+                label.TextWrapped=true;label.TextTruncate=Enum.TextTruncate.None
+                label.AutomaticSize=Enum.AutomaticSize.Y;label.Size=UDim2.new(1,0,0,24)
+            end
             local movement = card(page, "Character controls", "Overrides are restored when disabled or unloaded.")
             toggle(movement, "WalkSpeed override", "SpeedEnabled")
             slider(movement, "WalkSpeed", "WalkSpeed", 8, 40, 1)
@@ -1858,54 +2731,216 @@ do
             action(teardown, "Unload script", App.Unload)
         end
 
-        pill = create("TextButton", {Name = "Minimized", Text = "H  /  RISING    +", TextSize = 12,
+        pill = create("TextButton", {Name = "Minimized", Text = "H  /  RISING    +", TextSize = 14,
             TextColor3 = P.Text, Font = Enum.Font.GothamBold, BackgroundColor3 = P.Sidebar,
             BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(C.WindowX, C.WindowY),
-            Size = UDim2.fromOffset(174, 42), Visible = false}, root)
+            Size = UDim2.fromOffset(176, 48), Visible = false}, root)
         corners(pill, 21)
         local pillBorder = outline(pill, P.Accent)
         themed(function() pillBorder.Color = P.Accent end)
-        local function fittedScale()
-            viewport = root.AbsoluteSize
-            return math.min(1, math.max(0.12, (viewport.X - 28) / 800), math.max(0.12, (viewport.Y - 28) / 590))
-        end
-        local function positionWindow()
-            local scale = fittedScale()
-            local halfX, halfY = 400 * scale, 295 * scale
-            local width, height = math.max(viewport.X, 1), math.max(viewport.Y, 1)
-            local x = math.clamp(C.WindowX * width, math.min(halfX + 8, width / 2), math.max(width - halfX - 8, width / 2))
-            local y = math.clamp(C.WindowY * height, math.min(halfY + 8, height / 2), math.max(height - halfY - 8, height / 2))
-            App.Tween(main, {Position = UDim2.fromOffset(x, y)}, 0.15)
-            pill.Position = UDim2.fromOffset(math.clamp(x, 95, math.max(95, width - 95)), math.clamp(y, 30, math.max(30, height - 30)))
-            if main.Visible then App.Tween(mainScale, {Scale = scale}, 0.15) end
-        end
-        local function updateVisibility()
-            visibilityVersion = visibilityVersion + 1
-            local version = visibilityVersion
-            local visible = C.Visible == true
-            pill.Visible = visible and C.Minimized == true
-            if visible and C.Minimized ~= true then
-                main.Visible = true
-                positionWindow()
-                App.Tween(mainScale, {Scale = fittedScale()}, 0.22)
-                opacity(main, 0, 0.22)
+        local layoutSignature, fontsCompact, keyboardOpen, currentAvailableHeight
+        local layoutBusy=false
+        local function fittedScale() return 1 end
+        navLayout=function()
+            local index=(tabButtons[C.ActiveTab] or tabButtons.Dashboard).Index
+            if compact then
+                local cell=layoutWidth/#pageNames
+                activeIndicator.Size=UDim2.new(1/#pageNames,-4,1,-8)
+                App.Tween(activeIndicator,{Position=UDim2.fromOffset((index-1)*cell+2,4)},0.22)
+                indicatorLine.Position=UDim2.new(0.5,-10,1,-3)
+                indicatorLine.Size=UDim2.fromOffset(20,3)
             else
-                opacity(main, 1, 0.18)
-                App.Tween(mainScale, {Scale = fittedScale() * 0.96}, 0.18)
-                App.Maid:Delay(0.2, function() if version == visibilityVersion then main.Visible = false end end)
+                activeIndicator.Size=UDim2.new(1,0,0,44)
+                App.Tween(activeIndicator,{Position=UDim2.fromOffset(0,(index-1)*49)},0.22)
+                indicatorLine.Position=UDim2.fromOffset(0,12)
+                indicatorLine.Size=UDim2.fromOffset(3,19)
             end
         end
-        interactive(minimize, function() set("Minimized", true) end)
-        interactive(close, function() set("Visible", false) end)
-        interactive(pill, function() set("Minimized", false) end, nil, true)
-        watch(pill.MouseEnter, function() App.Tween(pill, {BackgroundColor3 = P.Control}, 0.15) end)
-        watch(pill.MouseLeave, function() App.Tween(pill, {BackgroundColor3 = P.Sidebar}, 0.15) end)
+        scrollFocused=function(box)
+            box=box or S.UserInputService:GetFocusedTextBox()
+            if not box or not box:IsDescendantOf(gui) then return end
+            local scrolling=box:FindFirstAncestorWhichIsA("ScrollingFrame")
+            if not scrolling then return end
+            local topY=scrolling.AbsolutePosition.Y+8
+            local bottomY=scrolling.AbsolutePosition.Y+scrolling.AbsoluteSize.Y-12
+            local boxTop,boxBottom=box.AbsolutePosition.Y,box.AbsolutePosition.Y+box.AbsoluteSize.Y
+            local adjustment=boxTop<topY and boxTop-topY or boxBottom>bottomY and boxBottom-bottomY or 0
+            if adjustment~=0 then
+                scrolling.CanvasPosition=Vector2.new(scrolling.CanvasPosition.X,math.max(0,scrolling.CanvasPosition.Y+adjustment))
+            end
+        end
+        refreshLayout=function(force)
+            if layoutBusy or not root.Parent then return end
+            local available=preview and Vector2.new(preview.Width,preview.Height) or root.AbsoluteSize
+            local availableHeight=available.Y
+            local keyboard=false
+            if preview then
+                keyboard=(preview.KeyboardHeight or 0)>0
+                availableHeight=availableHeight-(preview.KeyboardHeight or 0)
+            else
+                pcall(function()
+                    if S.UserInputService.OnScreenKeyboardVisible then
+                        local keyboardY=S.UserInputService.OnScreenKeyboardPosition.Y-root.AbsolutePosition.Y
+                        if keyboardY>0 and keyboardY<availableHeight then keyboard=true;availableHeight=keyboardY end
+                    end
+                end)
+            end
+            local touch=S.UserInputService.TouchEnabled
+            if preview then touch=preview.Touch end
+            local signature=string.format("%.1f:%.1f:%.1f:%s:%s",available.X,available.Y,availableHeight,tostring(touch),tostring(keyboard))
+            if not force and signature==layoutSignature then return end
+            layoutBusy=true;layoutSignature=signature
+            viewport=available;touchMode=touch;keyboardOpen=keyboard;currentAvailableHeight=availableHeight
+            compact=touch or available.X<720 or available.Y<520
+            local usableWidth=math.max(240,available.X)
+            local usableHeight=math.max(112,availableHeight)
+            layoutWidth=math.min(800,usableWidth-16)
+            local portrait=available.Y>available.X
+            local desiredHeight=compact and portrait and 760 or 590
+            layoutHeight=math.min(desiredHeight,usableHeight-16)
+            main.Size=UDim2.fromOffset(layoutWidth,layoutHeight)
+            local halfX,halfY=layoutWidth/2,layoutHeight/2
+            local x=math.clamp(C.WindowX*usableWidth,halfX+8,math.max(halfX+8,usableWidth-halfX-8))
+            local y=math.clamp(C.WindowY*usableHeight,halfY+8,math.max(halfY+8,usableHeight-halfY-8))
+            App.Tween(main,{Position=UDim2.fromOffset(x,y)},0.15)
+            if main.Visible then App.Tween(mainScale,{Scale=1},0.15) end
+            local headerHeight=compact and 56 or 62
+            top.Size=UDim2.new(1,0,0,headerHeight)
+            logo.Position=UDim2.fromOffset(compact and 12 or 19,compact and 13 or 16)
+            brand.Position=UDim2.fromOffset(compact and 52 or 61,compact and 15 or 13)
+            brand.Size=UDim2.new(1,compact and -156 or -180,0,24)
+            brandSub.Visible=not compact
+            minimize.Position=UDim2.new(1,-100,0,6)
+            close.Position=UDim2.new(1,-50,0,6)
+            minimize.Size=UDim2.fromOffset(44,44);close.Size=UDim2.fromOffset(44,44)
+            minimize.Visible=not keyboard;keyboardDismiss.Visible=keyboard
+            minimize:SetAttribute("ControlType","HeaderButton");close:SetAttribute("ControlType","HeaderButton")
+            sideTip.Visible=not compact
+            footer.Visible=not keyboard
+            if compact then
+                local bottom=keyboard and 0 or 80
+                sidebar.Visible=not keyboard
+                sidebar.Position=UDim2.new(0,0,1,-80)
+                sidebar.Size=UDim2.new(1,0,0,52)
+                nav.Position=UDim2.fromOffset(0,0);nav.Size=UDim2.fromScale(1,1)
+                content.Position=UDim2.fromOffset(8,headerHeight+8)
+                content.Size=UDim2.new(1,-16,1,-headerHeight-bottom-16)
+                footer.Position=UDim2.new(0,0,1,-28);footer.Size=UDim2.new(1,0,0,28)
+                statusDot.Position=UDim2.fromOffset(14,11)
+                footerStatus.Position=UDim2.fromOffset(30,0);footerStatus.Size=UDim2.new(1,-42,1,0)
+            else
+                sidebar.Visible=true
+                sidebar.Position=UDim2.fromOffset(0,62);sidebar.Size=UDim2.new(0,179,1,-105)
+                nav.Position=UDim2.fromOffset(12,18);nav.Size=UDim2.new(1,-24,0,#pageNames*49)
+                content.Position=UDim2.fromOffset(198,76);content.Size=UDim2.new(1,-218,1,-133)
+                footer.Position=UDim2.new(0,0,1,-42);footer.Size=UDim2.new(1,0,0,42)
+                statusDot.Position=UDim2.new(1,-179,0,17)
+                footerStatus.Position=UDim2.new(1,-160,0,0);footerStatus.Size=UDim2.new(0,140,1,0)
+            end
+            for name,tab in pairs(tabButtons) do
+                if compact then
+                    tab.Button.Position=UDim2.new((tab.Index-1)/#pageNames,0,0,0)
+                    tab.Button.Size=UDim2.new(1/#pageNames,0,1,0)
+                    tab.Number.Visible=false
+                    tab.Label.Text=shortNames[name] or name
+                    tab.Label.Position=UDim2.fromOffset(1,0);tab.Label.Size=UDim2.new(1,-2,1,0)
+                    tab.Label.TextXAlignment=Enum.TextXAlignment.Center
+                else
+                    tab.Button.Position=UDim2.fromOffset(0,(tab.Index-1)*49)
+                    tab.Button.Size=UDim2.new(1,0,0,44)
+                    tab.Number.Visible=true
+                    tab.Label.Text=name
+                    tab.Label.Position=UDim2.fromOffset(40,0);tab.Label.Size=UDim2.new(1,-45,1,0)
+                    tab.Label.TextXAlignment=Enum.TextXAlignment.Left
+                end
+            end
+            if fontsCompact~=compact then
+                fontsCompact=compact
+                for _,object in ipairs(main:GetDescendants()) do
+                    if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+                        local base=object:GetAttribute("BaseTextSize") or object.TextSize
+                        if object:GetAttribute("BaseTextSize")==nil then object:SetAttribute("BaseTextSize",base) end
+                        object.TextSize=compact and math.max(base,object:GetAttribute("MutedText") and 12 or 14) or base
+                        if object:GetAttribute("NavigationText") then object.TextSize=compact and 12 or base end
+                    end
+                end
+            end
+            brand.TextSize=compact and 16 or 14
+            for _,entry in ledgerRows do
+                if compact then
+                    entry.Row.Size=UDim2.new(1,0,0,52)
+                    entry.Label.Position=UDim2.fromOffset(0,0);entry.Label.Size=UDim2.new(1,0,0,24)
+                    entry.Values.Position=UDim2.fromOffset(0,25);entry.Values.Size=UDim2.new(1,0,0,24)
+                    entry.Values.TextXAlignment=Enum.TextXAlignment.Left
+                else
+                    entry.Row.Size=UDim2.new(1,0,0,29)
+                    entry.Label.Position=UDim2.fromOffset(0,0);entry.Label.Size=UDim2.new(.35,0,1,0)
+                    entry.Values.Position=UDim2.fromScale(.35,0);entry.Values.Size=UDim2.new(.65,0,1,0)
+                    entry.Values.TextXAlignment=Enum.TextXAlignment.Right
+                end
+            end
+            toastLayer.Position=UDim2.new(1,-12,1,-12)
+            toastLayer.Size=UDim2.new(0,math.min(340,usableWidth-24),1,-24)
+            for _,item in toasts do item.Frame.Size=UDim2.new(1,0,0,80) end
+            pill.Size=UDim2.fromOffset(176,48)
+            pill.Position=UDim2.fromOffset(math.clamp(x,96,math.max(96,usableWidth-96)),math.clamp(y,32,math.max(32,usableHeight-32)))
+            pill.Visible=(touchMode or compact or C.Visible==true) and (C.Visible~=true or C.Minimized==true)
+            navLayout()
+            for _,callback in ipairs(responsiveCallbacks) do callback() end
+            layoutBusy=false
+            if keyboard then App.Maid:Delay(.05,function()scrollFocused()end) end
+        end
+        local function positionWindow()refreshLayout(true)end
+        updateVisibility=function()
+            visibilityVersion=visibilityVersion+1
+            local version=visibilityVersion
+            local visible=C.Visible==true
+            pill.Visible=(touchMode or compact or visible) and (not visible or C.Minimized==true)
+            if visible and C.Minimized~=true then
+                main.Visible=true;positionWindow()
+                App.Tween(mainScale,{Scale=fittedScale()},0.22);opacity(main,0,0.22)
+            else
+                opacity(main,1,0.18);App.Tween(mainScale,{Scale=.98},0.18)
+                App.Maid:Delay(.2,function()if version==visibilityVersion then main.Visible=false end end)
+            end
+        end
+        App.PreviewLayout=function(width,height,touch,keyboardHeight)
+            preview={Width=math.max(240,tonumber(width) or 390),Height=math.max(160,tonumber(height) or 844),
+                Touch=touch~=false,KeyboardHeight=math.max(0,tonumber(keyboardHeight) or 0)}
+            root.AnchorPoint=Vector2.new(.5,.5);root.Position=UDim2.fromScale(.5,.5)
+            root.Size=UDim2.fromOffset(preview.Width,preview.Height)
+            refreshLayout(true);updateVisibility()
+        end
+        App.RestoreLayout=function()
+            preview=nil
+            root.AnchorPoint=Vector2.zero;root.Position=UDim2.fromOffset(0,0);root.Size=UDim2.fromScale(1,1)
+            refreshLayout(true);updateVisibility()
+            App.Maid:Delay(.05,function()refreshLayout(true)end)
+        end
+        App.LayoutSnapshot=function()
+            return {Compact=compact,Touch=touchMode,Width=layoutWidth,Height=layoutHeight,Scale=mainScale.Scale,
+                ViewportX=viewport.X,ViewportY=viewport.Y,Keyboard=keyboardOpen==true,Navigation=sidebar.Visible,
+                ContentWidth=content.AbsoluteSize.X,ContentHeight=content.AbsoluteSize.Y,
+                Visible=main.Visible,ReopenVisible=pill.Visible,Preview=preview~=nil,
+                NavigationX=sidebar.AbsolutePosition.X,NavigationY=sidebar.AbsolutePosition.Y,
+                NavigationWidth=sidebar.AbsoluteSize.X,NavigationHeight=sidebar.AbsoluteSize.Y,
+                AvailableHeight=currentAvailableHeight,KeyboardDone=keyboardDismiss.Visible}
+        end
+        local function releaseKeyboard()
+            local focused=S.UserInputService:GetFocusedTextBox()
+            if focused and focused:IsDescendantOf(gui) then focused:ReleaseFocus() end
+        end
+        interactive(minimize,function()releaseKeyboard();set("Minimized",true)end)
+        interactive(close,function()releaseKeyboard();set("Visible",false)end)
+        interactive(pill,function()set("Visible",true);set("Minimized",false)end,nil,true)
+        watch(pill.MouseEnter,function()App.Tween(pill,{BackgroundColor3=P.Control},.15)end)
+        watch(pill.MouseLeave,function()App.Tween(pill,{BackgroundColor3=P.Sidebar},.15)end)
         local dragStart, dragCenter, dragInput
         watch(top.InputBegan, function(event)
             if event.UserInputType ~= Enum.UserInputType.MouseButton1 and event.UserInputType ~= Enum.UserInputType.Touch then return end
             if S.UserInputService:GetFocusedTextBox() then return end
             local position = event.Position
-            if position.X >= minimize.AbsolutePosition.X - 5 then return end
+            if position.X >= main.AbsolutePosition.X+main.AbsoluteSize.X-110 then return end
             dragStart, dragCenter, dragInput = position, main.AbsolutePosition + main.AbsoluteSize / 2, event
         end)
         watch(S.UserInputService.InputChanged, function(event)
@@ -1939,7 +2974,7 @@ do
             pageVersion = pageVersion + 1
             local version = pageVersion
             local index = tabButtons[name].Index
-            App.Tween(activeIndicator, {Position = UDim2.fromOffset(0, (index - 1) * 49)}, 0.22)
+            navLayout()
             for tabName, value in pairs(tabButtons) do
                 App.Tween(value.Label, {TextColor3 = tabName == name and P.Text or P.Muted}, 0.15)
                 App.Tween(value.Number, {TextColor3 = tabName == name and P.Accent or P.Muted}, 0.15)
@@ -1966,8 +3001,14 @@ do
         end
         App.UIUpdate = function()
             if not App.Alive or not gui.Parent then return end
+            refreshLayout(false)
             local ok, data = pcall(App.GetDashboard)
             if not ok or type(data) ~= "table" then return end
+            if combatStatusLabel then combatStatusLabel.Text=tostring(data.CombatStatus or "Defense is off") end
+            local food=data.Food or {}
+            foodStatusLabel.Text=tostring(food.Status or "Auto Food off")
+            foodLedgerLabel.Text=string.format("Eaten: %s · Spent: ¥%s · This refill: ¥%s",number(food.Eaten or 0,0),
+                number(food.Spent or 0,0),number(food.CycleSpent or 0,0))
             dashboardLabels.Status.Text = tostring(data.Status or "Standing by")
             dashboardLabels.Character.Text = string.format("%s  ·  %s  ·  Mastery %s  ·  ¥ %s", tostring(data.Style or "--"), tostring(data.Rank or "--"), number(data.Mastery, 1), number(data.Cash, 0))
             dashboardLabels.Resources.Text = string.format("Stamina %s / %s (%s%%)  ·  Energy %s  ·  Hunger %s  ·  Thirst %s", number(data.Stamina, 0), number(data.StaminaMax, 0), number(data.StaminaPercent, 0), number(data.Energy, 0), number(data.Hunger, 0), number(data.Thirst, 0))
@@ -1977,7 +3018,11 @@ do
             App.Tween(dashboardLabels.StaminaFill, {Size = UDim2.new(math.clamp((tonumber(data.StaminaPercent) or 0) / 100, 0, 1), 0, 1, 0)}, 0.22)
             for _, stat in ipairs(data.Stats or {}) do
                 local label = statLabels[stat.Name]
-                if label then label.Text = string.format("%s     +%s     %s/min", number(stat.Value, 3), number(stat.Gain, 3), number(stat.PerMinute, 3)) end
+                if label then
+                    local digits=compact and 2 or 3
+                    local gain=tonumber(stat.Gain) or 0
+                    label.Text=string.format("%s   %s%s   %s/min",number(stat.Value,digits),gain>=0 and "+" or "",number(gain,digits),number(stat.PerMinute,digits))
+                end
             end
             footerStatus.Text = tostring(data.Status or "CONNECTED"):upper()
             profileModeLabel.Text = tostring(data.ProfileMode or "Profiles ready")
@@ -2007,11 +3052,16 @@ do
             end
         end))
         if App.OnBagEvent then App.Maid:Give(App.Remote.OnClientEvent:Connect(App.OnBagEvent)) end
+        if App.OnCombatEvent then App.Maid:Give(App.Remote.OnClientEvent:Connect(App.OnCombatEvent)) end
         App.Maid:Give(App.Player.CharacterRemoving:Connect(function()
+            if App.Food then App.Food.Stop("Waiting for respawn") end
+            if App.StopCombat then App.StopCombat() end
             App.StopTraining("Waiting for respawn")
             App.RestoreAll()
         end))
         App.Maid:Give(App.Player.CharacterAdded:Connect(function()
+            if App.Food then App.Food.Stop("Waiting for character") end
+            if App.StopCombat then App.StopCombat() end
             App.StopTraining("Waiting for character")
             App.State.Recovering=false
             App.Adapter.Dirty=true
@@ -2055,7 +3105,11 @@ do
         App.Maid:Give(App.S.RunService.Heartbeat:Connect(function()
             if not App.Alive then return end
             local success,err=xpcall(function()
-                App.StepTraining()
+                local foodOwns=App.Food and App.Food.Step(os.clock())
+                if not foodOwns then
+                    App.StepTraining()
+                    if App.StepCombat then App.StepCombat() end
+                end
                 App.StepProperties()
                 local now=os.clock()
                 if now-questTime>=2 then questTime=now;App.StepQuests() end
@@ -2069,7 +3123,13 @@ do
             end,debug.traceback)
             if not success then
                 App.LastError=tostring(err)
-                App.Set("TrainingEnabled",false)
+                local stopped=table.clone(App.State.Config)
+                stopped.TrainingEnabled=false
+                stopped.AutoFood=false
+                stopped.AutoWeave=false;stopped.AutoDodge=false;stopped.AutoBlock=false
+                App.Apply(stopped)
+                if App.StopCombat then App.StopCombat() end
+                if App.Food then App.Food.Stop("Stopped after an error") end
                 if os.clock()-errorTime>5 then
                     errorTime=os.clock()
                     App.Notify("Runtime stopped training: "..tostring(err):sub(1,150),"error",6)
