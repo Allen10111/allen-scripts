@@ -155,6 +155,7 @@ do
         BagPunchInterval = 0.65, BagAlternate = true,
         AutoFood = false, AutoBuyFood = false, FoodLow = 35, FoodTarget = 80,
         AutoCrate = false, CrateWait = 30,
+        AutoRoadwork = false, RoadworkDifficulty = "Easy",
         FoodItem = "Auto", FoodBudget = 5000,
         AutoWeave = false, AutoDodge = false, AutoBlock = false,
         ShotgunDefense = true, InstantDefense = true,
@@ -197,6 +198,7 @@ do
         end
         if result.MoveMode ~= "Teleport" and result.MoveMode ~= "Walk" then return nil, "Unknown movement mode" end
         if not tabs[result.ActiveTab] then return nil, "Unknown tab" end
+        if result.RoadworkDifficulty~="Easy" and result.RoadworkDifficulty~="Medium" and result.RoadworkDifficulty~="Hard" then return nil,"Unknown roadwork difficulty" end
         if not result.Accent:match("^#%x%x%x%x%x%x$") then return nil, "Use a six-digit accent hex color" end
         result.Accent = string.upper(result.Accent)
         local validKey, keyCode = pcall(function() return Enum.KeyCode[result.ToggleKey] end)
@@ -508,8 +510,12 @@ do
         App.MotionGeneration += 1
         local moving = App.Moving
         App.Moving = nil
+        if moving and moving.Blocked then moving.Blocked:Disconnect();moving.Blocked=nil end
+        if moving and moving.Path then moving.Path:Destroy();moving.Path=nil end
+        if moving and moving.ControlName then App.S.RunService:UnbindFromRenderStep(moving.ControlName);moving.ControlName=nil end
         if moving and moving.Character == App.Player.Character and moving.Root.Parent then
             pcall(moving.Humanoid.MoveTo, moving.Humanoid, moving.Root.Position)
+            pcall(moving.Humanoid.Move,moving.Humanoid,Vector3.zero,false)
         end
         if moving and moving.Thread and moving.Thread ~= coroutine.running() then
             App.Maid.Threads[moving.Thread] = nil
@@ -543,25 +549,111 @@ do
                 task.wait(0.45)
                 arrived = current() and (root.Position-position).Magnitude < 10
             else
-                local waypoints
-                local computed = pcall(function()
-                    local path = App.S.PathfindingService:CreatePath({AgentCanJump=true,WaypointSpacing=8})
-                    path:ComputeAsync(root.Position, position)
-                    if path.Status == Enum.PathStatus.Success then waypoints = path:GetWaypoints() end
-                    path:Destroy()
+                movement.ControlName="HajimeRoute_"..App.S.HttpService:GenerateGUID(false)
+                App.S.RunService:BindToRenderStep(movement.ControlName,Enum.RenderPriority.Last.Value+1,function()
+                    if not current() then return end
+                    local goal=movement.WalkGoal
+                    local direction=goal and (goal-root.Position)*Vector3.new(1,0,1) or Vector3.zero
+                    humanoid:Move(direction.Magnitude>1 and direction.Unit or Vector3.zero,false)
                 end)
-                if not current() then return end
-                if not computed or not waypoints or #waypoints > 256 then waypoints = {{Position=position}} end
                 local deadline = os.clock()+timeout-2
-                for _, point in waypoints do
-                    if not current() or os.clock() > deadline then break end
-                    if point.Action == Enum.PathWaypointAction.Jump then humanoid.Jump=true end
-                    humanoid:MoveTo(point.Position)
-                    local stepDeadline = math.min(deadline,os.clock()+4)
-                    repeat task.wait(0.05)
-                    until not current() or os.clock()>=stepDeadline or (root.Position-point.Position).Magnitude<4
+                local attempts=0
+                local function distance(point)
+                    return ((root.Position-point)*Vector3.new(1,0,1)).Magnitude
                 end
-                arrived = current() and (root.Position-position).Magnitude < 8
+                local radius=tonumber(target.ArrivalRadius) or 3
+                local arrivalHeight=tonumber(target.ArrivalHeight) or 6
+                while current() and os.clock()<deadline and attempts<12 do
+                    if distance(position)<=radius and math.abs(root.Position.Y-position.Y)<arrivalHeight then arrived=true;break end
+                    attempts+=1
+                    local corridor=RaycastParams.new();corridor.FilterType=Enum.RaycastFilterType.Exclude
+                    corridor.FilterDescendantsInstances={character};corridor.RespectCanCollide=true
+                    corridor.CollisionGroup=root.CollisionGroup
+                    if not workspace:Blockcast(root.CFrame,Vector3.new(1.6,2.5,1.6),position-root.Position,corridor) then
+                        movement.WalkGoal=position
+                        local best=distance(position);local progressed=os.clock()
+                        repeat
+                            task.wait(.04)
+                            if not current() then return end
+                            local remaining=distance(position)
+                            if remaining<best-.25 then best=remaining;progressed=os.clock()end
+                            local direction=(position-root.Position)*Vector3.new(1,0,1)
+                            if direction.Magnitude>.1 then
+                                local step=direction.Unit*math.min(3,direction.Magnitude)
+                                local ground=workspace:Raycast(root.Position+step+Vector3.new(0,1,0),Vector3.new(0,-12,0),corridor)
+                                if not ground or root.Position.Y-ground.Position.Y>8
+                                    or workspace:Blockcast(root.CFrame,Vector3.new(1.6,2.5,1.6),step,corridor)then break end
+                            end
+                        until os.clock()>=deadline or os.clock()-progressed>.65 or distance(position)<=radius
+                        movement.WalkGoal=nil
+                        if distance(position)<=radius and math.abs(root.Position.Y-position.Y)<arrivalHeight then arrived=true;break end
+                    end
+                    if movement.Blocked then movement.Blocked:Disconnect();movement.Blocked=nil end
+                    if movement.Path then movement.Path:Destroy();movement.Path=nil end
+                    local path=App.S.PathfindingService:CreatePath({AgentRadius=1.8,AgentHeight=5,
+                        AgentCanJump=true,AgentCanClimb=true,WaypointSpacing=3,Costs={Water=20}})
+                    movement.Path=path
+                    local ok=pcall(path.ComputeAsync,path,root.Position,position)
+                    if not current() then return end
+                    if not ok or path.Status~=Enum.PathStatus.Success then
+                        -- A failed navmesh route is never replaced by a blind wall-facing MoveTo.
+                        local toward=(position-root.Position)*Vector3.new(1,0,1)
+                        if toward.Magnitude>.1 then
+                            toward=toward.Unit
+                            local side=Vector3.new(-toward.Z,0,toward.X)
+                            local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+                            params.FilterDescendantsInstances={character};params.RespectCanCollide=true
+                            for _,direction in {toward,side,-side,-toward} do
+                                local delta=direction*4
+                                local ground=workspace:Raycast(root.Position+delta+Vector3.new(0,1,0),Vector3.new(0,-16,0),params)
+                                if ground and ground.Normal.Y>.6 and root.Position.Y-ground.Position.Y<9
+                                    and not workspace:Blockcast(root.CFrame,Vector3.new(1.6,2.5,1.6),delta,params) then
+                                    movement.WalkGoal=ground.Position
+                                    local untilTime=os.clock()+.65
+                                    repeat task.wait(.04) until not current() or os.clock()>=untilTime or distance(ground.Position)<1.5
+                                    movement.WalkGoal=nil
+                                    break
+                                end
+                            end
+                        end
+                        task.wait(.2)
+                        if attempts>=3 then break end
+                        continue
+                    end
+                    local points=path:GetWaypoints()
+                    local index,blocked=1,false
+                    movement.Blocked=path.Blocked:Connect(function(at)if at>=index then blocked=true end end)
+                    for i,point in points do
+                        index=i
+                        if not current() or os.clock()>=deadline then break end
+                        if distance(position)<=radius and math.abs(root.Position.Y-position.Y)<arrivalHeight then arrived=true;break end
+                        if distance(point.Position)<1.5 and math.abs(root.Position.Y-point.Position.Y)<5 then continue end
+                        if point.Action==Enum.PathWaypointAction.Jump then humanoid.Jump=true end
+                        movement.WalkGoal=point.Position
+                        humanoid:MoveTo(point.Position)
+                        local best=distance(point.Position)
+                        local progressed=os.clock()
+                        local stepDeadline=math.min(deadline,os.clock()+math.clamp(best/math.max(humanoid.WalkSpeed,8)*2+1,1.2,4))
+                        repeat
+                            task.wait(.04)
+                            if not current() then return end
+                            local remaining=distance(point.Position)
+                            if remaining<best-.25 then best=remaining;progressed=os.clock() end
+                            if os.clock()-progressed>.65 then
+                                -- Jump once to recover a low obstruction, then recompute from the new position.
+                                if humanoid.FloorMaterial~=Enum.Material.Air then humanoid.Jump=true end
+                                blocked=true
+                            end
+                        until blocked or os.clock()>=stepDeadline or distance(point.Position)<1.5
+                        if blocked or distance(point.Position)>=1.8 then break end
+                    end
+                    if arrived then break end
+                end
+                arrived=arrived or current() and distance(position)<=radius and math.abs(root.Position.Y-position.Y)<arrivalHeight
+                if movement.Blocked then movement.Blocked:Disconnect();movement.Blocked=nil end
+                if movement.Path then movement.Path:Destroy();movement.Path=nil end
+                if movement.ControlName then App.S.RunService:UnbindFromRenderStep(movement.ControlName);movement.ControlName=nil end
+                humanoid:Move(Vector3.zero,false)
             end
             if not current() then return end
             App.Moving = nil
@@ -767,6 +859,7 @@ do
         local config,state=App.State.Config,App.State
         if App.Food and App.Food.IsBusy() then return false end
         if App.Crates and App.Crates.IsBusy() then return false end
+        if App.Roadwork and App.Roadwork.IsBusy() then return false end
         if not config.TrainingEnabled then return false end
         if not config.QTEAssist and config.TrainingMethod~="Punching bags" then state.Status="QTE assistance disabled";return false end
         local character=App.Character()
@@ -913,6 +1006,7 @@ do
         if App.ReconcileCombat then App.ReconcileCombat(changed) end
         if App.Food then App.Food.Reconcile(changed) end
         if App.Crates then App.Crates.Reconcile(changed) end
+        if App.Roadwork then App.Roadwork.Reconcile(changed) end
     end
     function App.GetDashboard()
         local state=App.State
@@ -937,6 +1031,7 @@ do
     function App.Unload()
         if not App.Alive then return end
         App.Alive=false
+        if App.Roadwork then App.Roadwork.Stop("Off",true)end
         if App.Crates then App.Crates.Stop("Off") end
         if App.Food then App.Food.Destroy() end
         if App.StopCombat then App.StopCombat() end
@@ -1382,6 +1477,7 @@ do
         if not App.Alive or not Policy.Enabled(App.State.Config) then return "Off" end
         if App.Food and App.Food.IsBusy() then return "Eating" end
         if App.Crates and App.Crates.IsBusy() then return "Delivering crate" end
+        if App.Roadwork and App.Roadwork.IsBusy() then return "Running roadwork" end
         if App.Session or App.PendingStart or App.Moving or App.State.Config.TrainingEnabled
             or (App.Player:GetAttribute("TrainingUI") or "")~="" or character:GetAttribute("Training")~=nil then
             return "Paused during training or travel"
@@ -2328,6 +2424,135 @@ do
     App.Maid:Give(function()Crates.Stop("Off")end)
 end
 
+-- Roadwork starts at the native clock. Only server checkpoints advance the route.
+do
+    local R={};App.Roadwork=R
+    local session,pending,move,character
+    local status,completed,checkpoints,nextTry="Off",0,0,0
+    local remote=App.Boxing:FindFirstChild("RoadworkRemote")
+    local input,runOwned
+    local function sprint(enabled)
+        if not input then local ok,value=pcall(require,App.Boxing:FindFirstChild("BoxingVirtualInput"));if ok then input=value end end
+        if not input then return end
+        if enabled then
+            if not input.IsDown("Run") then runOwned=pcall(input.Set,"Run",true) or runOwned end
+        elseif runOwned then pcall(input.Set,"Run",false);runOwned=false end
+    end
+    local names={Easy="Prox",Medium="MedProx",Hard="HardProx"}
+    local function cancelMove()
+        if move and App.Moving==move then App.CancelMove() end;move=nil
+    end
+    function R.Stop(reason,clear)
+        cancelMove();sprint(false);pending=nil;status=reason or "Paused · use the clock to end the run"
+        if clear then session=nil;character=nil end
+    end
+    function R.IsBusy()return App.Alive and App.State.Config.AutoRoadwork and (session~=nil or pending~=nil)end
+    function R.Snapshot()return {Status=status,Completed=completed,Checkpoints=checkpoints,Index=session and session.Index,Total=session and #session.Points}end
+    function R.Reconcile(changed)if changed.AutoRoadwork then R.Stop(App.State.Config.AutoRoadwork and "Planning roadwork" or "Paused · use the clock to end the run")end end
+    local function go(position,walk,callback)
+        local _,h,r=App.Character()
+        if walk and r then
+            local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances={App.Player.Character};params.RespectCanCollide=true
+            local ground=workspace:Raycast(position+Vector3.new(0,3,0),Vector3.new(0,-18,0),params)
+            if ground and ground.Normal.Y>.6 then
+                local offset=h.HipHeight+r.Size.Y*.5+(h.RigType==Enum.HumanoidRigType.R6 and 2 or 0)
+                position=Vector3.new(position.X,ground.Position.Y+offset,position.Z)
+            end
+        end
+        local duration=r and math.clamp((r.Position-position).Magnitude/math.max(h.WalkSpeed,12)*2+5,7,25) or 20
+        local started=App.Move({Position=position-Vector3.new(0,3,0),WalkOnly=walk,TeleportOnly=not walk,Timeout=duration,
+            ArrivalRadius=callback and 1.5 or 4,ArrivalHeight=callback and 2 or 5},function(arrived)
+            move=nil;if not App.Alive then return end
+            if callback then callback(arrived) end
+        end)
+        move=App.Moving;return started
+    end
+    if remote and remote:IsA("RemoteEvent") then App.Maid:Give(remote.OnClientEvent:Connect(function(action,...)
+        local args=table.pack(...)
+        if action=="Start" and pending and pending.Issued and type(args[3])=="table" then
+            local points={}
+            for i,point in args[3] do if type(i)~="number" or typeof(point)~="Vector3" or i>200 then return end;points[i]=point end
+            if #points==0 then return end
+            session={Points=points,Index=1,Difficulty=args[1],Deadline=os.clock()+(tonumber(args[4]) or 180)+5}
+            pending=nil;character=App.Player.Character;status="Running roadwork · checkpoint 1/"..#points
+        elseif action=="Checkpoint" and session and type(args[1])=="number" then
+            local index=args[1]
+            if index==session.Index then checkpoints+=1;cancelMove();session.Index=index+1;session.WaitAt=nil end
+        elseif action=="End" and session then
+            sprint(false)
+            if args[1]=="Finished" then completed+=1;status="Roadwork complete" else status="Roadwork ended · "..tostring(args[1])end
+            cancelMove();session=nil;character=nil;nextTry=os.clock()+2
+        elseif action=="Notice" and (pending or session) then
+            status=tostring(args[1])
+            local seconds=status:match("again in (%d+)s")
+            if seconds and pending and not session then cancelMove();pending=nil;nextTry=os.clock()+math.clamp(tonumber(seconds),1,180)+.5 end
+        end
+    end)) end
+    function R.Step(now)
+        if not App.Alive or not App.State.Config.AutoRoadwork then return false end
+        now=now or os.clock()
+        local c,h,root=App.Character()
+        if not c then R.Stop("Waiting for character",true);return false end
+        if session and character~=c then R.Stop("Waiting for character",true);return false end
+        if session then
+            App.State.Status=status
+            if now>session.Deadline then R.Stop("Run timed out",true);nextTry=now+3;return false end
+            local target=session.Points[session.Index]
+            if not target then sprint(false);status="Waiting for finish confirmation";return true end
+            local percent=App.Stamina()
+            sprint(percent~=nil and percent>math.max(10,App.State.Config.StaminaLow))
+            if move and App.Moving~=move then move=nil end
+            if move then return true end
+            if (root.Position-target).Magnitude<=(tonumber(App.GameConfig.Roadwork.CheckpointRadius) or 7)-1 then
+                session.WaitAt=session.WaitAt or now;status="Confirming checkpoint "..session.Index.."/"..#session.Points
+                if now-session.WaitAt>5 then session.WaitAt=nil;status="Retrying checkpoint";go(target,true)end
+            else
+                status="Roadwork · checkpoint "..session.Index.."/"..#session.Points
+                go(target,true)
+            end
+            return true
+        end
+        if pending then
+            if now>pending.Deadline then R.Stop("Roadwork start not confirmed",true);nextTry=now+4;return false end
+            return true
+        end
+        if now<nextTry or App.Moving then return false end
+        if ((App.Player:GetAttribute("TrainingUI") or "")~="" and not (App.Session and App.Session.Owned)) or c:GetAttribute("CarryingCrate")~=nil then status="Finish the current activity first";return false end
+        local clock=workspace:FindFirstChild("Roadworkclock")
+        local prompt=clock and clock:FindFirstChild(names[App.State.Config.RoadworkDifficulty],true)
+        if not prompt or not prompt.Enabled or type(fireproximityprompt)~="function" then status="Roadwork clock unavailable";nextTry=now+2;return false end
+        local stamina=c:GetAttribute("Stamina")
+        if type(stamina)~="number" or stamina<(App.GameConfig.Roadwork.MinStaminaToStart or 10) then status="Recovering stamina for roadwork";return false end
+        App.StopTraining("Starting roadwork");if App.StopCombat then App.StopCombat()end
+        pending={Deadline=now+65};local request=pending
+        status="Travelling to roadwork clock"
+        local percent=App.Stamina();sprint(percent~=nil and percent>math.max(10,App.State.Config.StaminaLow))
+        local center=App.Adapter.Position(prompt)
+        local approach=center+Vector3.new(0,0,-6)
+        local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances={c};params.RespectCanCollide=true
+        local nearest
+        for _,offset in {Vector3.new(0,0,-6),Vector3.new(0,0,6),Vector3.new(6,0,0),Vector3.new(-6,0,0)} do
+            local ground=workspace:Raycast(center+offset+Vector3.new(0,4,0),Vector3.new(0,-20,0),params)
+            if ground and ground.Normal.Y>.6 and ground.Position.Y<center.Y-1.5 then
+                local candidate=center+offset
+                local distance=((candidate-root.Position)*Vector3.new(1,0,1)).Magnitude
+                if not nearest or distance<nearest then approach=candidate;nearest=distance end
+            end
+        end
+        go(approach,true,function(arrived)
+            if pending~=request or not App.State.Config.AutoRoadwork then return end
+            if not arrived then R.Stop("Clock route blocked",true);nextTry=os.clock()+3;return end
+            request.Issued=true;request.Deadline=os.clock()+8;status="Starting "..App.State.Config.RoadworkDifficulty.." roadwork"
+            local ok=pcall(fireproximityprompt,prompt)
+            if not ok then R.Stop("Clock interaction unavailable",true)end
+        end)
+        return true
+    end
+    App.Maid:Give(function()R.Stop("Off",true)end)
+end
+
 do
     function App.BuildUI()
         local S, Player = App.S, App.Player
@@ -2951,7 +3176,7 @@ do
         end
 
         local dashboardLabels, statLabels, ledgerRows = {}, {}, {}
-        local combatStatusLabel
+        local combatStatusLabel,roadStatusLabel
         do
             local page = pages.Dashboard.Scroll
             local overview = card(page, "Live session", "Training signals and character resources update in real time.")
@@ -3038,6 +3263,12 @@ do
                 App.Notify("World markers refreshed", "success")
             end)
             local crates=card(page,"Crate job","Teleports to pickup and delivery. Pauses training; food runs between deliveries. Rewards must be confirmed by the game.")
+            local road=card(page,"Roadwork","Runs through native checkpoints and repeats completed runs. Toggle off pauses travel; use the clock to end the native run.")
+            toggle(road,"Auto Roadwork","AutoRoadwork")
+            dropdown(road,"Difficulty","RoadworkDifficulty",{"Easy","Medium","Hard"})
+            roadStatusLabel=text(road,"Roadwork off",13,P.Muted)
+            roadStatusLabel.TextWrapped=true;roadStatusLabel.TextTruncate=Enum.TextTruncate.None
+            roadStatusLabel.AutomaticSize=Enum.AutomaticSize.Y;roadStatusLabel.Size=UDim2.new(1,0,0,24)
             toggle(crates,"Auto Crate","AutoCrate")
             slider(crates,"Wait before delivery teleport","CrateWait",0,60,1,"s")
             local quests = card(page, "Quest rewards", "Claims only rewards whose replicated progress is complete.")
@@ -3403,6 +3634,7 @@ do
             local ok, data = pcall(App.GetDashboard)
             if not ok or type(data) ~= "table" then return end
             if combatStatusLabel then combatStatusLabel.Text=tostring(data.CombatStatus or "Defense is off") end
+            if roadStatusLabel and App.Roadwork then local r=App.Roadwork.Snapshot();roadStatusLabel.Text=tostring(r.Status).." · Runs: "..tostring(r.Completed).." · Checkpoints: "..tostring(r.Checkpoints)end
             local food=data.Food or {}
             foodStatusLabel.Text=tostring(food.Status or "Auto Food off")
             foodLedgerLabel.Text=string.format("Eaten: %s · Spent: ¥%s · This refill: ¥%s",number(food.Eaten or 0,0),
@@ -3452,6 +3684,7 @@ do
         if App.OnBagEvent then App.Maid:Give(App.Remote.OnClientEvent:Connect(App.OnBagEvent)) end
         if App.OnCombatEvent then App.Maid:Give(App.Remote.OnClientEvent:Connect(App.OnCombatEvent)) end
         App.Maid:Give(App.Player.CharacterRemoving:Connect(function()
+            if App.Roadwork then App.Roadwork.Stop("Waiting for respawn",true)end
             if App.Crates then App.Crates.Stop("Waiting for respawn") end
             if App.Food then App.Food.Stop("Waiting for respawn") end
             if App.StopCombat then App.StopCombat() end
@@ -3459,6 +3692,7 @@ do
             App.RestoreAll()
         end))
         App.Maid:Give(App.Player.CharacterAdded:Connect(function()
+            if App.Roadwork then App.Roadwork.Stop("Waiting for character",true)end
             if App.Crates then App.Crates.Stop("Waiting for character") end
             if App.Food then App.Food.Stop("Waiting for character") end
             if App.StopCombat then App.StopCombat() end
@@ -3506,10 +3740,12 @@ do
             if not App.Alive then return end
             local success,err=xpcall(function()
                 local c=App.Player.Character
+                local roadOwns=App.Roadwork and App.Roadwork.IsBusy() and App.Roadwork.Step(os.clock())
                 local crateOwns=App.Crates and c and c:GetAttribute("CarryingCrate")~=nil and App.Crates.Step(os.clock())
-                local foodOwns=not crateOwns and App.Food and App.Food.Step(os.clock())
-                if not foodOwns and not crateOwns and App.Crates then crateOwns=App.Crates.Step(os.clock()) end
-                if not foodOwns and not crateOwns then
+                local foodOwns=not roadOwns and not crateOwns and App.Food and App.Food.Step(os.clock())
+                if not roadOwns and not foodOwns and not crateOwns and App.Roadwork then roadOwns=App.Roadwork.Step(os.clock())end
+                if not roadOwns and not foodOwns and not crateOwns and App.Crates then crateOwns=App.Crates.Step(os.clock()) end
+                if not roadOwns and not foodOwns and not crateOwns then
                     App.StepTraining()
                     if App.StepCombat then App.StepCombat() end
                 end
@@ -3530,6 +3766,7 @@ do
                 stopped.TrainingEnabled=false
                 stopped.AutoFood=false
                 stopped.AutoCrate=false
+                stopped.AutoRoadwork=false
                 stopped.AutoWeave=false;stopped.AutoDodge=false;stopped.AutoBlock=false
                 App.Apply(stopped)
                 if App.StopCombat then App.StopCombat() end
