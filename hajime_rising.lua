@@ -1207,7 +1207,7 @@ end
 do
     local D = { Threats={}, Owned={}, Native=nil, NextWeave=0, NextDash=0, Errors=0,
         Weaves=0, Dodges=0, Blocks=0, AcceptedWeaves=0, AcceptedDodges=0, AcceptedBlocks=0,
-        ConfirmedDodges=0, ConfirmedBlocks=0, Status="Off", Serial=0 }
+        ConfirmedDodges=0, ConfirmedBlocks=0, RejectedDodges=0, Status="Off", Serial=0 }
     App.Defense = D
     local Policy = {}
     App.CombatPolicy = Policy
@@ -1226,7 +1226,9 @@ do
         scale=App.Finite(scale) and math.clamp(scale,0.4,6) or 1
         reaction=App.Finite(reaction) and math.clamp(reaction,0,0.4) or 0.08
         local impact=received+math.clamp(hitTime*scale,0.035,3)
-        return impact,math.max(received+reaction,impact-0.11),impact+0.18
+        local desired=math.max(received+reaction,impact-0.11)
+        local latest=math.max(received,impact-0.065)
+        return impact,math.max(received,math.min(desired,latest)),impact+0.18
     end
     function Policy.Window(threat,now)
         if now>threat.Expires then return "expired" end
@@ -1242,6 +1244,22 @@ do
         local a=direction*Vector3.new(1,0,1)
         local b=toAttacker*Vector3.new(1,0,1)
         return a.Magnitude>0.1 and b.Magnitude>0.1 and a.Unit:Dot(b.Unit)<0.25
+    end
+    function Policy.DashDirections(movement,toAttacker,facing)
+        local toward=toAttacker*Vector3.new(1,0,1)
+        local away=toward.Magnitude>.1 and -toward.Unit or -facing*Vector3.new(1,0,1)
+        if away.Magnitude<.1 then away=Vector3.new(0,0,1) end
+        away=away.Unit
+        local manual=movement*Vector3.new(1,0,1)
+        local preferred=Policy.SafeDashDirection(manual,toward) and manual.Unit or away
+        local side=Vector3.new(-away.Z,0,away.X)
+        local result={}
+        for _,direction in {preferred,away,side,-side} do
+            local duplicate=false
+            for _,old in result do if old:Dot(direction)>.99 then duplicate=true;break end end
+            if not duplicate then result[#result+1]=direction end
+        end
+        return result
     end
     local function status(value)
         D.Status=value
@@ -1295,9 +1313,15 @@ do
         if D.Intent and input then
             local _,humanoid=App.Character()
             local manual=humanoid and humanoid.MoveDirection or Vector3.zero
+            if D.DriveCharacter==App.Player.Character and humanoid then
+                if (manual-D.Intent).Magnitude<.05 then
+                    manual=D.ManualMove or Vector3.zero
+                    pcall(humanoid.Move,humanoid,manual,false)
+                end
+            end
             pcall(input.SetIntent,manual)
         end
-        D.Intent=nil
+        D.Intent=nil;D.DriveCharacter=nil;D.ManualMove=nil;D.DashHandoff=nil
         if intentBound then pcall(App.S.RunService.UnbindFromRenderStep,App.S.RunService,renderName);intentBound=false end
     end
     local function releaseHeld()
@@ -1309,15 +1333,30 @@ do
         releaseIntent()
         D.Held=nil
     end
-    local function ownIntent(direction,character)
+    local function ownIntent(direction,character,drive)
+        if drive then
+            local _,humanoid=App.Character()
+            if not humanoid then return false end
+            D.ManualMove=humanoid.MoveDirection
+            D.DriveCharacter=character
+            humanoid:Move(direction,false)
+        end
         D.Intent=direction
-        if intentBound then return end
+        if intentBound then return true end
         intentBound=true
         App.S.RunService:BindToRenderStep(renderName,Enum.RenderPriority.Last.Value+3,function()
             if not App.Alive or not D.Intent or App.Player.Character~=character or not Policy.Enabled(App.State.Config) then return end
             local input=D.Native and D.Native.Input
+            if D.DriveCharacter==character then
+                local _,humanoid=App.Character()
+                if humanoid then
+                    if (humanoid.MoveDirection-D.Intent).Magnitude>.05 then D.ManualMove=humanoid.MoveDirection end
+                    humanoid:Move(D.Intent,false)
+                end
+            end
             if input then pcall(input.SetIntent,D.Intent) end
         end)
+        return true
     end
     App.Maid:Give(function() releaseHeld() end)
 
@@ -1375,7 +1414,7 @@ do
         local attackerPose={Root=attackerRoot,CFrame=attackerRoot.CFrame+attackerVelocity*lead}
         local ownShift=CFrame.new(ownVelocity*lead)
         local ok,result=pcall(D.Native.Geometry.Contact,attackerPose,threat.Path,character,threat.Zone,false,
-            -0.08,threat.Options,threat.Punch,ownShift)
+            -0.08,threat.Punch,nil,ownShift)
         return ok and result or nil,attackerRoot
     end
     local function manualGuard(character)
@@ -1389,18 +1428,39 @@ do
     local function checkAcceptance(character,now)
         local pending=D.PendingAcceptance
         if not pending then return end
-        if pending.Character~=character or now>pending.Expires then D.PendingAcceptance=nil;return end
+        if pending.Character~=character then
+            D.PendingAcceptance=nil
+            if pending.Kind=="Dash" then
+                D.RejectedDodges+=1
+                if pending.Threat then pending.Threat.Handled=false;pending.Threat.DashTried=true end
+                releaseIntent()
+            end
+            return
+        end
+        local dashAt=App.Player:GetAttribute("HitMoveDashAt")
         local accepted=pending.Kind=="Weave" and (App.Player:GetAttribute("WeaveMode")==true or character:GetAttribute("Weaving")~=nil)
-            or pending.Kind=="Dash" and finiteAttribute(App.Player,"DashingUntil",now)
+            or pending.Kind=="Dash" and (finiteAttribute(App.Player,"DashingUntil",now)
+                or App.Finite(dashAt) and dashAt>=(pending.RequestedAt or math.huge))
             or pending.Kind=="Block" and character:GetAttribute("Blocking")==true
         if accepted then
             local key=pending.Kind=="Weave" and "AcceptedWeaves" or pending.Kind=="Dash" and "AcceptedDodges" or "AcceptedBlocks"
             D[key]+=1;D.PendingAcceptance=nil
+            if pending.Kind=="Dash" and D.DashHandoff then
+                D.DashHandoff.ReleaseAt=math.max(now,math.min(now+.8,tonumber(App.Player:GetAttribute("DashingUntil")) or now))
+            end
+        elseif now>pending.Expires then
+            D.PendingAcceptance=nil
+            if pending.Kind=="Dash" then
+                D.RejectedDodges+=1
+                if pending.Threat then pending.Threat.Handled=false;pending.Threat.DashTried=true end
+                releaseIntent()
+            end
         end
     end
     local function acted(kind,character,threat,releaseAt)
         threat.Handled=true
-        D.PendingAcceptance={Kind=kind,Character=character,Expires=os.clock()+0.25}
+        D.PendingAcceptance={Kind=kind,Character=character,Threat=threat,Expires=os.clock()+(kind=="Dash" and .16 or .25),
+            RequestedAt=kind=="Dash" and D.DashHandoff and D.DashHandoff.RequestedAt or nil}
         if kind~="Dash" then D.Held={Kind=kind,Character=character,ReleaseAt=releaseAt,Zone=threat.Zone} end
     end
     local function tryWeave(threat,character,humanoid,root,now)
@@ -1419,7 +1479,7 @@ do
         return true
     end
     local function tryDash(threat,character,humanoid,root,attackerRoot,now)
-        if not App.State.Config.AutoDodge or now<D.NextDash or manualGuard(character)
+        if not App.State.Config.AutoDodge or threat.DashTried or now<D.NextDash or manualGuard(character)
             or D.Native.Input.IsDown("Weave") or physical(App.GameConfig.Weave.Key)
             or App.Player:GetAttribute("WeaveMode")==true then return false end
         local loadout=App.Player:GetAttribute("Loadout")
@@ -1427,22 +1487,27 @@ do
         if not ok or type(value)~="table" or type(value.Dash)~="string" then return false end
         local settings=App.GameConfig.DashSettings(value.Dash)
         if type(settings)~="table" or (character:GetAttribute("Stamina") or 0)<(settings.StaminaCost or 12) then return false end
-        local movement=humanoid.MoveDirection*Vector3.new(1,0,1)
-        local stationary=movement.Magnitude<0.1
-        if stationary then
-            local away=(root.Position-attackerRoot.Position)*Vector3.new(1,0,1)
-            if away.Magnitude<0.1 then away=-root.CFrame.LookVector*Vector3.new(1,0,1) end
-            movement=away.Unit
-        elseif not Policy.SafeDashDirection(movement,attackerRoot.Position-root.Position) then return false end
+        local lastDash=App.Player:GetAttribute("HitMoveDashAt")
+        if App.Finite(lastDash) and now-lastDash<(tonumber(settings.Cooldown) or .8) then return false end
         local parameters=RaycastParams.new()
         parameters.FilterType=Enum.RaycastFilterType.Exclude
         parameters.FilterDescendantsInstances={character,attackerRoot.Parent}
         parameters.RespectCanCollide=true
-        if workspace:Blockcast(root.CFrame,Vector3.new(1.8,2.8,0.8),movement.Unit*4,parameters) then return false end
-        if stationary then D.Native.Input.SetIntent(movement) end
+        local movement
+        for _,direction in Policy.DashDirections(humanoid.MoveDirection,attackerRoot.Position-root.Position,root.CFrame.LookVector) do
+            if not workspace:Blockcast(root.CFrame,Vector3.new(1.8,2.8,0.8),direction*4,parameters) then
+                movement=direction;break
+            end
+        end
+        if not movement then return false end
+        -- Dash reads MoveDirection before virtual intent. Own both briefly so
+        -- deferred native input cannot see a cleared or forward-chasing vector.
+        if not ownIntent(movement,character,true) then return false end
+        D.Native.Input.SetIntent(movement)
+        D.DashHandoff={Character=character,RequestedAt=os.clock(),ReleaseAt=now+.2}
         local tapped=pcall(D.Native.Input.Tap,"Dash")
-        if stationary then D.Native.Input.SetIntent(humanoid.MoveDirection) end
-        if not tapped then return false end
+        if not tapped then releaseIntent();return false end
+        D.LastDashDirection=movement
         D.NextDash=now+math.max(0.3,tonumber(settings.Cooldown) or 0.8)
         D.Dodges+=1;acted("Dash",character,threat)
         status("Auto Dodge input · native dash")
@@ -1467,7 +1532,7 @@ do
             return
         end
         if action=="Hit" then
-            if attacker==character and zone==true then D.ConfirmedBlocks+=1 end
+            if attacker==character and scale==true then D.ConfirmedBlocks+=1 end
             return
         end
         if action~="Punch" or not nativeModules() then return end
@@ -1529,6 +1594,8 @@ do
         if not nativeModules() then return end
         local now=os.clock()
         checkAcceptance(character,now)
+        local handoff=D.DashHandoff
+        if handoff and (handoff.Character~=character or now>=handoff.ReleaseAt) then releaseIntent() end
         local held=D.Held
         if held then
             local enabled=held.Kind=="Weave" and App.State.Config.AutoWeave or held.Kind=="Block" and App.State.Config.AutoBlock
@@ -1537,7 +1604,7 @@ do
         for index=#D.Threats,1,-1 do
             if Policy.Window(D.Threats[index],now)=="expired" then table.remove(D.Threats,index) end
         end
-        if D.Held or finiteAttribute(App.Player,"DashingUntil",now) then return end
+        if D.Held or D.PendingAcceptance or finiteAttribute(App.Player,"DashingUntil",now) then return end
         if now-lastScan<0.025 then return end
         lastScan=now
         local best,attackerRoot
@@ -1565,6 +1632,7 @@ do
         return {Status=D.Status,Weaves=D.Weaves,Dodges=D.Dodges,Blocks=D.Blocks,
             AcceptedWeaves=D.AcceptedWeaves,AcceptedDodges=D.AcceptedDodges,AcceptedBlocks=D.AcceptedBlocks,
             ConfirmedDodges=D.ConfirmedDodges,ConfirmedBlocks=D.ConfirmedBlocks,Errors=D.Errors,
+            RejectedDodges=D.RejectedDodges,LastDashDirection=D.LastDashDirection,
             LastError=D.LastError,Threats=#D.Threats,Inputs=D.Weaves+D.Dodges+D.Blocks}
     end
 end
@@ -2651,12 +2719,12 @@ do
             local page=pages.Combat.Scroll
             local defense=card(page,"Automatic defense","Choose which defensive actions to use. All actions start off.")
             toggle(defense,"Auto Weave","AutoWeave")
-            toggle(defense,"Auto Dodge","AutoDodge")
+            toggle(defense,"Auto Dodge","AutoDodge","Equip Boxing gloves. Retreats or moves sideways from incoming punches; pauses during training and eating.")
             toggle(defense,"Auto Block","AutoBlock")
             combatStatusLabel=text(defense,"Defense is off",12,P.Muted)
             combatStatusLabel.TextWrapped=true
             combatStatusLabel.AutomaticSize=Enum.AutomaticSize.Y
-            local threats=card(page,"Threat detection")
+            local threats=card(page,"Threat detection","Defense starts earlier against fast punches.")
             toggle(threats,"React to players","CombatPlayers")
             toggle(threats,"React to NPCs","CombatNPCs")
             slider(threats,"Reaction delay","CombatReactionDelay",0,0.35,0.01,"s")
