@@ -154,9 +154,11 @@ do
         StaminaResume = 85, EnergyFloor = 10, StopAtGoal = true,
         BagPunchInterval = 0.65, BagAlternate = true,
         AutoFood = false, AutoBuyFood = false, FoodLow = 35, FoodTarget = 80,
+        AutoCrate = false, CrateWait = 30,
         FoodItem = "Auto", FoodBudget = 5000,
         AutoWeave = false, AutoDodge = false, AutoBlock = false,
-        CombatPlayers = true, CombatNPCs = true, CombatReactionDelay = 0.08,
+        ShotgunDefense = true, InstantDefense = true,
+        CombatPlayers = true, CombatNPCs = true, CombatReactionDelay = 0,
         CombatThreatRange = 12, CombatStaminaFloor = 20,
         AutoClaim = false, AntiAFK = false, SpeedEnabled = false, WalkSpeed = 16,
         JumpEnabled = false, JumpPower = 50, FOVEnabled = false, FOV = 70,
@@ -170,7 +172,7 @@ do
         StaminaResume = {20,100}, EnergyFloor = {0,30}, WalkSpeed = {8,40},
         JumpPower = {20,100}, FOV = {40,100}, WindowX = {0,1}, WindowY = {0,1}, BagPunchInterval = {0.3,2},
         CombatReactionDelay = {0,0.35}, CombatThreatRange = {6,24}, CombatStaminaFloor = {5,70},
-        FoodLow = {5,80}, FoodTarget = {20,100}, FoodBudget = {0,50000} }
+        FoodLow = {5,80}, FoodTarget = {20,100}, FoodBudget = {0,50000}, CrateWait = {0,60} }
     local tabs = { Dashboard=true, Training=true, Combat=true, ["World & Quests"]=true,
         ["Player & QoL"]=true, ["Configs & Settings"]=true }
     function App.Normalize(raw)
@@ -521,7 +523,8 @@ do
         local generation = App.MotionGeneration
         local movement = { Character=character, Humanoid=humanoid, Root=root }
         App.Moving = movement
-        App.Maid:Delay(24,function()
+        local timeout=math.clamp(tonumber(target.Timeout) or 24,5,120)
+        App.Maid:Delay(timeout,function()
             if App.Moving==movement then
                 App.CancelMove();App.State.Status="Route timed out"
                 if onArrival then onArrival(false) end
@@ -535,21 +538,21 @@ do
             local position = target.Anchor and (target.Anchor.CFrame*CFrame.new(0,3,1)).Position
                 or target.Position + Vector3.new(0,3,0)
             local arrived = false
-            if App.State.Config.MoveMode == "Teleport" then
+            if target.TeleportOnly or App.State.Config.MoveMode == "Teleport" and not target.WalkOnly then
                 if current() then character:PivotTo(CFrame.new(position, position + root.CFrame.LookVector)) end
                 task.wait(0.45)
                 arrived = current() and (root.Position-position).Magnitude < 10
             else
                 local waypoints
                 local computed = pcall(function()
-                    local path = App.S.PathfindingService:CreatePath({AgentCanJump=true,WaypointSpacing=5})
+                    local path = App.S.PathfindingService:CreatePath({AgentCanJump=true,WaypointSpacing=8})
                     path:ComputeAsync(root.Position, position)
                     if path.Status == Enum.PathStatus.Success then waypoints = path:GetWaypoints() end
                     path:Destroy()
                 end)
                 if not current() then return end
-                if not computed or not waypoints or #waypoints > 80 then waypoints = {{Position=position}} end
-                local deadline = os.clock()+18
+                if not computed or not waypoints or #waypoints > 256 then waypoints = {{Position=position}} end
+                local deadline = os.clock()+timeout-2
                 for _, point in waypoints do
                     if not current() or os.clock() > deadline then break end
                     if point.Action == Enum.PathWaypointAction.Jump then humanoid.Jump=true end
@@ -601,6 +604,7 @@ do
         local target = App.Adapter.World[App.State.Config.WorldDestination]
         if not target then return false, "Destination is not streamed; refresh destinations" end
         if App.Food then App.Food.Stop("Manual travel") end
+        if App.Crates then App.Crates.Stop("Manual travel") end
         if App.State.Config.TrainingEnabled then App.Set("TrainingEnabled",false) end
         if (App.Player:GetAttribute("TrainingUI") or "") ~= "" then
             return false,"Stop the current activity before travelling"
@@ -762,6 +766,7 @@ do
     function App.CanTrain()
         local config,state=App.State.Config,App.State
         if App.Food and App.Food.IsBusy() then return false end
+        if App.Crates and App.Crates.IsBusy() then return false end
         if not config.TrainingEnabled then return false end
         if not config.QTEAssist and config.TrainingMethod~="Punching bags" then state.Status="QTE assistance disabled";return false end
         local character=App.Character()
@@ -907,6 +912,7 @@ do
         if changed.SpeedEnabled or changed.JumpEnabled or changed.FOVEnabled then App.StepProperties() end
         if App.ReconcileCombat then App.ReconcileCombat(changed) end
         if App.Food then App.Food.Reconcile(changed) end
+        if App.Crates then App.Crates.Reconcile(changed) end
     end
     function App.GetDashboard()
         local state=App.State
@@ -926,11 +932,12 @@ do
             Elapsed=elapsed,Rank=App.Player:GetAttribute("RankWillpower"),Executor=App.Executor,
             ProfileMode=App.ConfigStore.Mode,LastNotice=state.LastNotice,CombatStatus=state.CombatStatus,
             Combat=App.GetCombatSnapshot and App.GetCombatSnapshot() or nil,
-            Food=App.Food and App.Food.Snapshot() or nil }
+            Food=App.Food and App.Food.Snapshot() or nil,Crates=App.Crates and App.Crates.Snapshot() or nil }
     end
     function App.Unload()
         if not App.Alive then return end
         App.Alive=false
+        if App.Crates then App.Crates.Stop("Off") end
         if App.Food then App.Food.Destroy() end
         if App.StopCombat then App.StopCombat() end
         App.StopTraining()
@@ -1207,13 +1214,15 @@ end
 do
     local D = { Threats={}, Owned={}, Native=nil, NextWeave=0, NextDash=0, Errors=0,
         Weaves=0, Dodges=0, Blocks=0, AcceptedWeaves=0, AcceptedDodges=0, AcceptedBlocks=0,
-        ConfirmedDodges=0, ConfirmedBlocks=0, RejectedDodges=0, Status="Off", Serial=0 }
+        ConfirmedDodges=0, ConfirmedBlocks=0, RejectedDodges=0, Status="Off", Serial=0,
+        Shotguns={}, ShotgunDetected=0, ShotgunEscapes=0, ShotgunBlocks=0, ShotgunStatus="Idle" }
     App.Defense = D
     local Policy = {}
     App.CombatPolicy = Policy
     local renderName = "AllenHajimeDefense_" .. App.S.HttpService:GenerateGUID(false)
     local intentBound = false
     local lastScan = 0
+    local lastShotgunScan = -math.huge
 
     function Policy.Enabled(config)
         return config.AutoWeave == true or config.AutoDodge == true or config.AutoBlock == true
@@ -1234,6 +1243,12 @@ do
         if now>threat.Expires then return "expired" end
         if now<threat.ReactAt then return "waiting" end
         return "ready"
+    end
+    function Policy.DashReady(threat,now,config)
+        return now<=threat.Expires and now>=(config.InstantDefense and threat.Received or threat.ReactAt)
+    end
+    function Policy.IsShotgun(barrage,special)
+        return barrage=="Shotgun" or type(special)=="table" and special.Mode=="Shotgun"
     end
     function Policy.CanWeave(punch,zone,weave)
         return zone=="Head" and type(weave)=="table" and type(weave.SlipAnims)=="table"
@@ -1286,7 +1301,8 @@ do
             assert(type(geometry)=="table" and type(geometry.PathFor)=="function"
                 and type(geometry.Contact)=="function","Contact geometry unavailable")
             assert(type(skills)=="table" and type(skills.Has)=="function","Skill contract unavailable")
-            return {Input=input,Geometry=geometry,Skills=skills}
+            local loaded,techniques=pcall(function()return require(App.Boxing:FindFirstChild("BoxingTechniques"))end)
+            return {Input=input,Geometry=geometry,Skills=skills,Techniques=loaded and type(techniques)=="table" and techniques or nil}
         end)
         if not ok then D.ModuleFailure=tostring(native);status("Native defensive controls unavailable");return false end
         D.Native=native
@@ -1321,7 +1337,7 @@ do
             end
             pcall(input.SetIntent,manual)
         end
-        D.Intent=nil;D.DriveCharacter=nil;D.ManualMove=nil;D.DashHandoff=nil
+        D.Intent=nil;D.DriveCharacter=nil;D.ManualMove=nil;D.DashHandoff=nil;D.IntentOwner=nil;D.RetreatRecord=nil
         if intentBound then pcall(App.S.RunService.UnbindFromRenderStep,App.S.RunService,renderName);intentBound=false end
     end
     local function releaseHeld()
@@ -1333,14 +1349,16 @@ do
         releaseIntent()
         D.Held=nil
     end
-    local function ownIntent(direction,character,drive)
+    local function ownIntent(direction,character,drive,owner)
+        if not drive and D.DriveCharacter then releaseIntent() end
         if drive then
             local _,humanoid=App.Character()
             if not humanoid then return false end
-            D.ManualMove=humanoid.MoveDirection
+            if D.DriveCharacter~=character then D.ManualMove=humanoid.MoveDirection end
             D.DriveCharacter=character
             humanoid:Move(direction,false)
         end
+        D.IntentOwner=owner
         D.Intent=direction
         if intentBound then return true end
         intentBound=true
@@ -1363,6 +1381,7 @@ do
     local function blocked(character,humanoid)
         if not App.Alive or not Policy.Enabled(App.State.Config) then return "Off" end
         if App.Food and App.Food.IsBusy() then return "Eating" end
+        if App.Crates and App.Crates.IsBusy() then return "Delivering crate" end
         if App.Session or App.PendingStart or App.Moving or App.State.Config.TrainingEnabled
             or (App.Player:GetAttribute("TrainingUI") or "")~="" or character:GetAttribute("Training")~=nil then
             return "Paused during training or travel"
@@ -1401,7 +1420,7 @@ do
         local npc=tags:HasTag(attacker,"BoxingNPC") or tags:HasTag(attacker,"AIFighter") or tags:HasTag(attacker,"RankedBot")
         return Policy.Entity(player~=nil,npc,App.State.Config),root
     end
-    local function contact(threat,character,root,now)
+    local function contact(threat,character,root,now,margin,shift)
         local allowed,attackerRoot=allowedAttacker(threat.Attacker)
         if not allowed then return end
         local range=App.State.Config.CombatThreatRange
@@ -1412,10 +1431,102 @@ do
         if attackerVelocity.Magnitude>60 then attackerVelocity=Vector3.zero end
         if ownVelocity.Magnitude>60 then ownVelocity=Vector3.zero end
         local attackerPose={Root=attackerRoot,CFrame=attackerRoot.CFrame+attackerVelocity*lead}
-        local ownShift=CFrame.new(ownVelocity*lead)
+        local ownShift=CFrame.new(shift or ownVelocity*lead)
         local ok,result=pcall(D.Native.Geometry.Contact,attackerPose,threat.Path,character,threat.Zone,false,
-            -0.08,threat.Punch,nil,ownShift)
+            margin or -0.08,threat.Punch,nil,ownShift)
         return ok and result or nil,attackerRoot
+    end
+    local function clearShotgun(attacker,record)
+        if D.Shotguns[attacker]~=record then return end
+        D.Shotguns[attacker]=nil
+        if record.Connection then record.Connection:Disconnect();record.Connection=nil end
+        if D.RetreatRecord==record then releaseIntent() end
+        if D.Held and D.Held.ShotgunRecord==record then releaseHeld() end
+    end
+    local function clearShotguns()
+        for attacker,record in D.Shotguns do clearShotgun(attacker,record) end
+        lastShotgunScan=-math.huge
+        D.ShotgunStatus="Idle"
+    end
+    local function noteShotgun(attacker,threat,now,attribute)
+        local record=D.Shotguns[attacker]
+        if not record then
+            record={Attacker=attacker,Character=App.Player.Character,Started=now,Deadline=now+10,LastPacket=now}
+            D.Shotguns[attacker]=record;D.ShotgunDetected+=1
+        end
+        if attribute and not record.Attribute then
+            record.Attribute=true
+            record.Connection=attacker:GetAttributeChangedSignal("BarrageVFX"):Connect(function()
+                if attacker:GetAttribute("BarrageVFX")~="Shotgun" then clearShotgun(attacker,record) end
+            end)
+        end
+        if threat then record.Latest=threat;record.LastPacket=now end
+        return record
+    end
+    local function shotgunAlive(record,now)
+        return record and D.Shotguns[record.Attacker]==record and record.Character==App.Player.Character
+            and record.Attacker.Parent and now<record.Deadline
+            and (record.Attribute and record.Attacker:GetAttribute("BarrageVFX")=="Shotgun"
+                or not record.Attribute and now-record.LastPacket<.45)
+    end
+    local function shotgunTemplate(record)
+        if record.Latest then return record.Latest end
+        if record.Template then return record.Template end
+        local techniques=D.Native and D.Native.Techniques
+        local definition=techniques and techniques.List and techniques.List.Shotgun
+        local phase=type(definition)=="table" and type(definition.Phases)=="table" and definition.Phases[1]
+        local hit=type(phase)=="table" and type(phase.Hits)=="table" and phase.Hits[1]
+        if type(hit)~="table" or type(hit.Path)~="table" then return end
+        local name=hit.Base or "Jab"
+        local punch=App.GameConfig.Punches[name]
+        if type(punch)~="table" then return end
+        local zone=hit.Zone or "Head"
+        local options={Mode="Shotgun",Points=hit.Path,Time=hit.HitTime}
+        local ok,path=pcall(D.Native.Geometry.PathFor,record.Attacker,name,zone,punch,options)
+        if not ok or type(path)~="table" or #path==0 or #path>600 then return end
+        record.Template={Name=name,Punch=punch,Path=path,Options=options,Zone=zone,HitTime=hit.HitTime}
+        return record.Template
+    end
+    local function scanShotguns(character,root,now)
+        if not App.State.Config.ShotgunDefense then
+            if next(D.Shotguns) then clearShotguns() end
+            return
+        end
+        if now-lastShotgunScan<.015 then return end
+        lastShotgunScan=now
+        local seen,examined={},0
+        local function inspect(attacker)
+            if seen[attacker] or examined>=96 then return end
+            seen[attacker]=true;examined+=1
+            local allowed,attackerRoot=allowedAttacker(attacker)
+            if allowed and (attackerRoot.Position-root.Position).Magnitude<=App.State.Config.CombatThreatRange
+                and attacker:GetAttribute("BarrageVFX")=="Shotgun" then noteShotgun(attacker,nil,now,true) end
+        end
+        if App.State.Config.CombatPlayers then
+            for _,player in App.S.Players:GetPlayers() do if player.Character then inspect(player.Character) end end
+        end
+        if App.State.Config.CombatNPCs then
+            for _,tag in {"BoxingNPC","AIFighter","RankedBot"} do
+                for _,attacker in App.S.CollectionService:GetTagged(tag) do inspect(attacker) end
+            end
+        end
+        for attacker,record in D.Shotguns do
+            local allowed,attackerRoot=allowedAttacker(attacker)
+            if not allowed or record.Character~=character
+                or (attackerRoot.Position-root.Position).Magnitude>App.State.Config.CombatThreatRange
+                or record.Attribute and attacker:GetAttribute("BarrageVFX")~="Shotgun"
+                or not record.Attribute and now-record.LastPacket>=.45 then clearShotgun(attacker,record) end
+        end
+    end
+    local function shotgunThreat(record,now)
+        if not shotgunAlive(record,now) then return end
+        local template=shotgunTemplate(record)
+        if not template then return end
+        local hitTime=App.Finite(template.HitTime) and template.HitTime or .0667
+        local impact,react=Policy.Timing(record.Started,hitTime,1,App.State.Config.CombatReactionDelay)
+        return {Attacker=record.Attacker,Name=template.Name,Punch=template.Punch,Path=template.Path,Options=template.Options,
+            Zone=template.Zone,Received=record.Started,ImpactAt=impact,ReactAt=react,Expires=now+.2,
+            Shotgun=true,ShotgunRecord=record,ReportedZone=false,AttributeTelegraph=true}
     end
     local function manualGuard(character)
         local input=D.Native.Input
@@ -1447,6 +1558,7 @@ do
             D[key]+=1;D.PendingAcceptance=nil
             if pending.Kind=="Dash" and D.DashHandoff then
                 D.DashHandoff.ReleaseAt=math.max(now,math.min(now+.8,tonumber(App.Player:GetAttribute("DashingUntil")) or now))
+                if pending.Threat and pending.Threat.Shotgun then D.ShotgunEscapes+=1 end
             end
         elseif now>pending.Expires then
             D.PendingAcceptance=nil
@@ -1461,7 +1573,8 @@ do
         threat.Handled=true
         D.PendingAcceptance={Kind=kind,Character=character,Threat=threat,Expires=os.clock()+(kind=="Dash" and .16 or .25),
             RequestedAt=kind=="Dash" and D.DashHandoff and D.DashHandoff.RequestedAt or nil}
-        if kind~="Dash" then D.Held={Kind=kind,Character=character,ReleaseAt=releaseAt,Zone=threat.Zone} end
+        if kind~="Dash" then D.Held={Kind=kind,Character=character,ReleaseAt=releaseAt,Zone=threat.Zone,
+            Attacker=threat.Attacker,ShotgunRecord=threat.ShotgunRecord} end
     end
     local function tryWeave(threat,character,humanoid,root,now)
         if not App.State.Config.AutoWeave or now<D.NextWeave or not Policy.CanWeave(threat.Punch,threat.Zone,App.GameConfig.Weave)
@@ -1494,35 +1607,84 @@ do
         parameters.FilterDescendantsInstances={character,attackerRoot.Parent}
         parameters.RespectCanCollide=true
         local movement
-        for _,direction in Policy.DashDirections(humanoid.MoveDirection,attackerRoot.Position-root.Position,root.CFrame.LookVector) do
-            if not workspace:Blockcast(root.CFrame,Vector3.new(1.8,2.8,0.8),direction*4,parameters) then
+        local desired=threat.Shotgun and Vector3.zero or humanoid.MoveDirection
+        for _,direction in Policy.DashDirections(desired,attackerRoot.Position-root.Position,root.CFrame.LookVector) do
+            local endpointBlocked=threat.Shotgun and contact(threat,character,root,now,.45,direction*5)
+            if not endpointBlocked and not workspace:Blockcast(root.CFrame,Vector3.new(1.8,2.8,0.8),direction*4,parameters) then
                 movement=direction;break
             end
         end
         if not movement then return false end
         -- Dash reads MoveDirection before virtual intent. Own both briefly so
         -- deferred native input cannot see a cleared or forward-chasing vector.
-        if not ownIntent(movement,character,true) then return false end
+        if not ownIntent(movement,character,true,"Dash") then return false end
         D.Native.Input.SetIntent(movement)
-        D.DashHandoff={Character=character,RequestedAt=os.clock(),ReleaseAt=now+.2}
+        D.DashHandoff={Character=character,RequestedAt=os.clock(),ReleaseAt=now+.2,ShotgunRecord=threat.ShotgunRecord}
         local tapped=pcall(D.Native.Input.Tap,"Dash")
         if not tapped then releaseIntent();return false end
         D.LastDashDirection=movement
         D.NextDash=now+math.max(0.3,tonumber(settings.Cooldown) or 0.8)
         D.Dodges+=1;acted("Dash",character,threat)
-        status("Auto Dodge input · native dash")
+        status(threat.Shotgun and "Shotgun · escape dash input" or "Auto Dodge input · native dash")
         return true
     end
     local function tryBlock(threat,character,now)
+        if threat.Shotgun and not threat.ReportedZone then return false end
         if not App.State.Config.AutoBlock or manualGuard(character) or D.Native.Input.IsDown("Weave")
             or App.Player:GetAttribute("WeaveMode")==true or (character:GetAttribute("BlockStamina") or 0)<=0 then return false end
         if finiteAttribute(App.Player,"DashingUntil",now) then return false end
         if not setOwned("Block",true) then return false end
         if threat.Zone=="Head" then setOwned("HeadBlock",true) end
         D.Blocks+=1
+        if threat.Shotgun then D.ShotgunBlocks+=1 end
         acted("Block",character,threat,math.clamp(threat.ImpactAt+0.15,now+0.15,now+0.5))
         status("Auto Block input · "..threat.Zone)
         return true
+    end
+    local function safeRetreat(character,root,attackerRoot,direction)
+        local parameters=RaycastParams.new()
+        parameters.FilterType=Enum.RaycastFilterType.Exclude
+        parameters.FilterDescendantsInstances={character,attackerRoot.Parent}
+        parameters.RespectCanCollide=true
+        return not workspace:Blockcast(root.CFrame,Vector3.new(1.8,2.8,.8),direction*2,parameters)
+            and workspace:Raycast(root.Position+direction*2+Vector3.new(0,1,0),Vector3.new(0,-10,0),parameters)~=nil
+    end
+    local function shotgunRetreat(threat,character,humanoid,root,attackerRoot,now)
+        if not threat.Shotgun or not App.State.Config.AutoDodge or not shotgunAlive(threat.ShotgunRecord,now)
+            or manualGuard(character) or D.Held or D.PendingAcceptance or D.DashHandoff
+            or D.Native.Input.IsDown("Weave") or physical(App.GameConfig.Weave.Key)
+            or App.Player:GetAttribute("WeaveMode")==true then
+            if D.IntentOwner=="ShotgunRetreat" then releaseIntent() end
+            return false
+        end
+        for _,direction in Policy.DashDirections(Vector3.zero,attackerRoot.Position-root.Position,root.CFrame.LookVector) do
+            if safeRetreat(character,root,attackerRoot,direction) then
+                if ownIntent(direction,character,true,"ShotgunRetreat") then
+                    D.Native.Input.SetIntent(direction);D.RetreatRecord=threat.ShotgunRecord
+                    D.ShotgunStatus="Keeping distance from Shotgun"
+                    status("Shotgun · keeping distance while dash recovers")
+                    return true
+                end
+            end
+        end
+        if D.IntentOwner=="ShotgunRetreat" then releaseIntent() end
+        return false
+    end
+    local function refreshShotgunGuard(held,character,root,now)
+        if not held.ShotgunRecord then return end
+        if not App.State.Config.ShotgunDefense or not shotgunAlive(held.ShotgunRecord,now) then releaseHeld();return end
+        local latest
+        for _,threat in D.Threats do
+            if threat.Shotgun and threat.ReportedZone and not threat.Handled and threat.Attacker==held.Attacker
+                and Policy.Window(threat,now)=="ready" and contact(threat,character,root,now) then
+                if not latest or threat.Received>latest.Received then latest=threat end
+            end
+        end
+        if latest then
+            setOwned("HeadBlock",latest.Zone=="Head")
+            held.Zone=latest.Zone;held.ReleaseAt=math.min(held.ShotgunRecord.Deadline,math.max(held.ReleaseAt,latest.ImpactAt+.15))
+            latest.Handled=true
+        end
     end
     function App.OnCombatEvent(action,attacker,punchName,scale,zone,jammed,special)
         if not App.Alive or not Policy.Enabled(App.State.Config) then return end
@@ -1552,7 +1714,7 @@ do
         local options
         if type(special)=="table" then
             if App.Finite(special.HitTime) and special.HitTime>0 then hitTime=special.HitTime end
-            options={AnimId=special.AnimId,Time=special.HitTime,Reach=special.Reach,Points=special.Points}
+            options={Mode=special.Mode,AnimId=special.AnimId,Time=special.HitTime,Reach=special.Reach,Points=special.Points}
         end
         local received=os.clock()
         local impact,react,expires=Policy.Timing(received,hitTime,scale,App.State.Config.CombatReactionDelay)
@@ -1561,22 +1723,31 @@ do
         if not ok or type(path)~="table" or #path==0 or #path>600 then return end
         -- Coalesce repeated copies of the same announcement, not distinct combos.
         for _,previous in D.Threats do
-            if previous.Attacker==attacker and previous.Name==punchName and received-previous.Received<0.04 then return end
+            if previous.Attacker==attacker and previous.Name==punchName and previous.Zone==zone
+                and (previous.Options and previous.Options.Mode)==(options and options.Mode)
+                and (previous.Options and previous.Options.Points)==(options and options.Points)
+                and received-previous.Received<0.04 then return end
         end
         D.Serial+=1
-        D.Threats[#D.Threats+1]={Id=D.Serial,Attacker=attacker,Name=punchName,Punch=punch,Path=path,
-            Options=options,Zone=zone,Received=received,ImpactAt=impact,ReactAt=react,Expires=expires}
+        local threat={Id=D.Serial,Attacker=attacker,Name=punchName,Punch=punch,Path=path,
+            Options=options,Zone=zone,Received=received,ImpactAt=impact,ReactAt=react,Expires=expires,HitTime=hitTime}
+        if App.State.Config.ShotgunDefense and Policy.IsShotgun(attacker:GetAttribute("BarrageVFX"),special) then
+            threat.Shotgun=true;threat.ReportedZone=true
+            threat.ShotgunRecord=noteShotgun(attacker,threat,received,attacker:GetAttribute("BarrageVFX")=="Shotgun")
+        end
+        D.Threats[#D.Threats+1]=threat
         while #D.Threats>24 do table.remove(D.Threats,1) end
     end
     function App.StopCombat(reason)
         releaseHeld()
         table.clear(D.Threats)
+        clearShotguns()
         D.PendingAcceptance=nil
         status(reason or "Off")
     end
     function App.ReconcileCombat(changed)
         local relevant=false
-        for _,key in {"AutoWeave","AutoDodge","AutoBlock","CombatPlayers","CombatNPCs","CombatStaminaFloor"} do
+        for _,key in {"AutoWeave","AutoDodge","AutoBlock","CombatPlayers","CombatNPCs","CombatStaminaFloor","ShotgunDefense","InstantDefense"} do
             if changed[key] then relevant=true;break end
         end
         if relevant then
@@ -1589,17 +1760,26 @@ do
         local character,humanoid,root=App.Character()
         local reason=not character and "Waiting for character" or blocked(character,humanoid)
         if reason then
-            releaseHeld();table.clear(D.Threats);D.PendingAcceptance=nil;status(reason);return
+            releaseHeld();table.clear(D.Threats);D.PendingAcceptance=nil;D.ShotgunStatus=reason;status(reason);return
         end
         if not nativeModules() then return end
         local now=os.clock()
         checkAcceptance(character,now)
+        scanShotguns(character,root,now)
         local handoff=D.DashHandoff
-        if handoff and (handoff.Character~=character or now>=handoff.ReleaseAt) then releaseIntent() end
+        if handoff and (handoff.Character~=character or now>=handoff.ReleaseAt
+            or handoff.ShotgunRecord and not shotgunAlive(handoff.ShotgunRecord,now)) then releaseIntent() end
+        if D.IntentOwner=="ShotgunRetreat" then
+            local retreat=shotgunThreat(D.RetreatRecord,now)
+            local hit,attackerRoot
+            if retreat then hit,attackerRoot=contact(retreat,character,root,now,.45) end
+            if not hit or manualGuard(character) or not safeRetreat(character,root,attackerRoot,D.Intent) then releaseIntent() end
+        end
         local held=D.Held
         if held then
             local enabled=held.Kind=="Weave" and App.State.Config.AutoWeave or held.Kind=="Block" and App.State.Config.AutoBlock
             if held.Character~=character or not enabled or now>=held.ReleaseAt then releaseHeld() end
+            if D.Held and held.Kind=="Block" then refreshShotgunGuard(held,character,root,now) end
         end
         for index=#D.Threats,1,-1 do
             if Policy.Window(D.Threats[index],now)=="expired" then table.remove(D.Threats,index) end
@@ -1609,15 +1789,38 @@ do
         lastScan=now
         local best,attackerRoot
         for _,threat in D.Threats do
-            if not threat.Handled and Policy.Window(threat,now)=="ready" and (not best or threat.ImpactAt<best.ImpactAt) then
-                local hit,attackingRoot=contact(threat,character,root,now)
+            local ready=Policy.Window(threat,now)=="ready" or App.State.Config.AutoDodge and Policy.DashReady(threat,now,App.State.Config)
+            if not threat.Handled and ready and (not best or threat.ImpactAt<best.ImpactAt) then
+                local hit,attackingRoot=contact(threat,character,root,now,threat.Shotgun and .45 or nil)
                 if hit then best,attackerRoot=threat,attackingRoot end
             end
         end
-        if not best then status("Waiting for incoming punches");return end
-        if tryWeave(best,character,humanoid,root,now) then return end
-        if tryDash(best,character,humanoid,root,attackerRoot,now) then return end
-        tryBlock(best,character,now)
+        if App.State.Config.ShotgunDefense and App.State.Config.AutoDodge then
+            for _,record in D.Shotguns do
+                local threat=shotgunThreat(record,now)
+                if threat and Policy.DashReady(threat,now,App.State.Config) then
+                    local hit,attackingRoot=contact(threat,character,root,now,.45)
+                    if hit and (not best or not best.Shotgun) then best,attackerRoot=threat,attackingRoot end
+                end
+            end
+        end
+        if not best then
+            if D.IntentOwner=="ShotgunRetreat" then releaseIntent() end
+            D.ShotgunStatus="Idle";status("Waiting for incoming punches");return
+        end
+        if not best.Shotgun and D.IntentOwner=="ShotgunRetreat" then releaseIntent() end
+        local timed=Policy.Window(best,now)=="ready"
+        if best.Shotgun then
+            D.ShotgunStatus="Shotgun detected · escape first"
+            if tryDash(best,character,humanoid,root,attackerRoot,now) then return end
+            if timed and best.ReportedZone and tryBlock(best,character,now) then return end
+            if shotgunRetreat(best,character,humanoid,root,attackerRoot,now) then return end
+            if timed and best.ReportedZone then tryWeave(best,character,humanoid,root,now) end
+            return
+        end
+        if timed and tryWeave(best,character,humanoid,root,now) then return end
+        if Policy.DashReady(best,now,App.State.Config) and tryDash(best,character,humanoid,root,attackerRoot,now) then return end
+        if timed then tryBlock(best,character,now) end
     end
     function App.StepCombat()
         local ok,message=xpcall(step,debug.traceback)
@@ -1633,6 +1836,7 @@ do
             AcceptedWeaves=D.AcceptedWeaves,AcceptedDodges=D.AcceptedDodges,AcceptedBlocks=D.AcceptedBlocks,
             ConfirmedDodges=D.ConfirmedDodges,ConfirmedBlocks=D.ConfirmedBlocks,Errors=D.Errors,
             RejectedDodges=D.RejectedDodges,LastDashDirection=D.LastDashDirection,
+            ShotgunDetected=D.ShotgunDetected,ShotgunEscapes=D.ShotgunEscapes,ShotgunBlocks=D.ShotgunBlocks,ShotgunStatus=D.ShotgunStatus,
             LastError=D.LastError,Threats=#D.Threats,Inputs=D.Weaves+D.Dodges+D.Blocks}
     end
 end
@@ -1696,6 +1900,7 @@ do
             cycle.Energy and App.State.Config.EnergyFloor>0 and (not energy or energy<cycle.EnergyGoal) or false
     end
     local function nativeBusy(character)
+        if character and character:GetAttribute("CarryingCrate")~=nil then return true end
         local activity=App.Player:GetAttribute("TrainingUI")
         local training=character and character:GetAttribute("Training")
         return type(activity)=="string" and activity~="" or training~=nil and training~=false
@@ -2001,6 +2206,126 @@ do
         table.clear(connections)
     end
     App.Maid:Give(Food.Destroy)
+end
+
+-- Native crate prompts and delivery-region entry; rewards are observed, never requested.
+do
+    local Crates={};App.Crates=Crates
+    local active,generation,nextTry=nil,0,0
+    local status,delivered,earned="Off",0,0
+    local function carrying(character) return character and character:GetAttribute("CarryingCrate")~=nil end
+    local function release(reason,delay)
+        local old=active;active=nil;generation+=1
+        if old and old.Move and App.Moving==old.Move then App.CancelMove() end
+        status=reason or "Ready";nextTry=os.clock()+(delay or .5)
+        if old then App.State.NextStart=nextTry;App.State.Status=status end
+    end
+    function Crates.Stop(reason) release(reason or "Off",1) end
+    function Crates.IsBusy() return App.Alive and active~=nil end
+    function Crates.Snapshot()return {Status=status,Delivered=delivered,Earned=earned}end
+    function Crates.Reconcile(changed)
+        if changed.AutoCrate or changed.CrateWait then Crates.Stop(App.State.Config.AutoCrate and "Planning crate route" or "Off") end
+    end
+    function Crates.Step(now)
+        if not App.Alive or not App.State.Config.AutoCrate then
+            if active then release("Off") end;status="Off";return false
+        end
+        now=now or os.clock()
+        local character,humanoid,root=App.Character()
+        if not character or App.Player:GetAttribute("GameLoaded")~=true then
+            if active then release("Waiting for character",2) end;return false
+        end
+        if now<nextTry and not active then return false end
+        local folder=workspace:FindFirstChild("Crates job")
+        local prompt=folder and folder:FindFirstChild("CratePrompt",true)
+        local drop=folder and folder:FindFirstChild("DropOff") and folder.DropOff:FindFirstChild("End")
+        if not prompt or not prompt:IsA("ProximityPrompt") or not drop or not drop:IsA("BasePart") then
+            status="Crate job is not loaded";nextTry=now+2;return false
+        end
+        if not active then
+            if App.Food and App.Food.IsBusy() or App.Moving and not App.Session and not App.PendingStart then return false end
+            if (App.Player:GetAttribute("TrainingUI") or "")~="" and not (App.Session and App.Session.Owned) then
+                status="Finish the manual activity first";return false
+            end
+            App.StopTraining("Starting crate job");if App.StopCombat then App.StopCombat() end
+            generation+=1
+            active={Character=character,Generation=generation,Phase="Ready",Deadline=now+12,
+                Cash=tonumber(App.Player:GetAttribute("Cash")) or 0}
+        end
+        local record=active
+        if record.Character~=character then release("Waiting for respawn",2);return false end
+        App.State.Status=status
+        local function moveTo(position,walk,phase)
+            record.Phase="Moving";record.Deadline=now+100
+            local token=record.Generation
+            local started=App.Move({Position=position,TeleportOnly=true,Timeout=95},function(arrived)
+                if not App.Alive or active~=record or generation~=token then return end
+                record.Phase=arrived and phase or "Failed"
+            end)
+            record.Move=App.Moving
+            if not started then record.Phase="Failed" end
+        end
+        if record.Phase=="Moving" then
+            if record.Move and App.Moving~=record.Move then record.Phase="Failed" end
+            if now>record.Deadline then record.Phase="Failed" end
+            return true
+        end
+        if record.Phase=="Failed" then release("Crate route blocked · retrying",5);return false end
+        if record.Phase=="Ready" then
+            if now>record.Deadline then release("Waiting for the current activity to end",5);return false end
+            if (App.Player:GetAttribute("TrainingUI") or "")~="" or character:GetAttribute("Training")~=nil then return true end
+            if carrying(character) then
+                local pickedAt=character:GetAttribute("CarryingCrate")
+                local elapsed=type(pickedAt)=="number" and workspace:GetServerTimeNow()-pickedAt or 0
+                record.PickTime=record.PickTime or now
+                if type(pickedAt)~="number" then elapsed=now-record.PickTime end
+                local remaining=App.State.Config.CrateWait-elapsed
+                if remaining>0 then
+                    record.Deadline=now+remaining+12
+                    status="Carrying crate · delivery in "..math.ceil(remaining).."s"
+                    return true
+                end
+                record.Picked=true;status="Delivering crate · teleporting"
+                moveTo(drop.Position-Vector3.new(0,3,0),true,"Confirm")
+            else
+                local position=App.Adapter.Position(prompt)
+                if not position then release("Crate pickup unavailable",3);return false end
+                status="Travelling to crate pickup";moveTo(position,false,"Pickup")
+            end
+            return true
+        end
+        if record.Phase=="Pickup" then
+            if carrying(character) then record.Phase="Ready";return true end
+            local position=App.Adapter.Position(prompt)
+            if not position or (root.Position-position).Magnitude>prompt.MaxActivationDistance or not prompt.Enabled then
+                release("Crate pickup is unavailable",3);return false
+            end
+            if type(fireproximityprompt)~="function" then release("Prompt helper unavailable",10);return false end
+            local ok=pcall(fireproximityprompt,prompt)
+            if not ok then release("Unable to activate crate prompt",5);return false end
+            record.Phase="WaitPickup";record.Deadline=now+4;status="Picking up crate"
+            return true
+        end
+        if record.Phase=="WaitPickup" then
+            if carrying(character) then record.Picked=true;record.Phase="Ready"
+            elseif now>=record.Deadline then release("Crate pickup not confirmed",5);return false end
+            return true
+        end
+        if record.Phase=="Confirm" then
+            record.Phase="WaitReward";record.Deadline=now+5;status="Confirming crate reward"
+        end
+        if record.Phase=="WaitReward" then
+            local cash=tonumber(App.Player:GetAttribute("Cash")) or record.Cash
+            if record.Picked and not carrying(character) and cash>record.Cash then
+                delivered+=1;earned+=cash-record.Cash
+                release("Crate delivered · +¥"..tostring(cash-record.Cash),1);return false
+            end
+            if now>=record.Deadline then release("Delivery reward not confirmed · retrying",8);return false end
+            return true
+        end
+        return true
+    end
+    App.Maid:Give(function()Crates.Stop("Off")end)
 end
 
 do
@@ -2712,6 +3037,9 @@ do
                 destinations.Refresh()
                 App.Notify("World markers refreshed", "success")
             end)
+            local crates=card(page,"Crate job","Teleports to pickup and delivery. Pauses training; food runs between deliveries. Rewards must be confirmed by the game.")
+            toggle(crates,"Auto Crate","AutoCrate")
+            slider(crates,"Wait before delivery teleport","CrateWait",0,60,1,"s")
             local quests = card(page, "Quest rewards", "Claims only rewards whose replicated progress is complete.")
             toggle(quests, "Claim completed quests", "AutoClaim")
         end
@@ -2721,6 +3049,8 @@ do
             toggle(defense,"Auto Weave","AutoWeave")
             toggle(defense,"Auto Dodge","AutoDodge","Equip Boxing gloves. Retreats or moves sideways from incoming punches; pauses during training and eating.")
             toggle(defense,"Auto Block","AutoBlock")
+            toggle(defense,"Shotgun escape priority","ShotgunDefense","Detects the barrage tell and prioritizes escape. Auto Block can guard reported hit zones while escape is unavailable.")
+            toggle(defense,"Fastest dodge reaction","InstantDefense","Starts a dodge as soon as a threatening attack is detected. Weave and block timing still follows the hit.")
             combatStatusLabel=text(defense,"Defense is off",12,P.Muted)
             combatStatusLabel.TextWrapped=true
             combatStatusLabel.AutomaticSize=Enum.AutomaticSize.Y
@@ -3122,12 +3452,14 @@ do
         if App.OnBagEvent then App.Maid:Give(App.Remote.OnClientEvent:Connect(App.OnBagEvent)) end
         if App.OnCombatEvent then App.Maid:Give(App.Remote.OnClientEvent:Connect(App.OnCombatEvent)) end
         App.Maid:Give(App.Player.CharacterRemoving:Connect(function()
+            if App.Crates then App.Crates.Stop("Waiting for respawn") end
             if App.Food then App.Food.Stop("Waiting for respawn") end
             if App.StopCombat then App.StopCombat() end
             App.StopTraining("Waiting for respawn")
             App.RestoreAll()
         end))
         App.Maid:Give(App.Player.CharacterAdded:Connect(function()
+            if App.Crates then App.Crates.Stop("Waiting for character") end
             if App.Food then App.Food.Stop("Waiting for character") end
             if App.StopCombat then App.StopCombat() end
             App.StopTraining("Waiting for character")
@@ -3173,8 +3505,11 @@ do
         App.Maid:Give(App.S.RunService.Heartbeat:Connect(function()
             if not App.Alive then return end
             local success,err=xpcall(function()
-                local foodOwns=App.Food and App.Food.Step(os.clock())
-                if not foodOwns then
+                local c=App.Player.Character
+                local crateOwns=App.Crates and c and c:GetAttribute("CarryingCrate")~=nil and App.Crates.Step(os.clock())
+                local foodOwns=not crateOwns and App.Food and App.Food.Step(os.clock())
+                if not foodOwns and not crateOwns and App.Crates then crateOwns=App.Crates.Step(os.clock()) end
+                if not foodOwns and not crateOwns then
                     App.StepTraining()
                     if App.StepCombat then App.StepCombat() end
                 end
@@ -3194,6 +3529,7 @@ do
                 local stopped=table.clone(App.State.Config)
                 stopped.TrainingEnabled=false
                 stopped.AutoFood=false
+                stopped.AutoCrate=false
                 stopped.AutoWeave=false;stopped.AutoDodge=false;stopped.AutoBlock=false
                 App.Apply(stopped)
                 if App.StopCombat then App.StopCombat() end
