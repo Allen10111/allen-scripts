@@ -16727,6 +16727,7 @@ end
 local key = "__ALLEN_MATCH_" .. MODE
 if env[key] then env[key]:Destroy() end
 local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0, QTEEnabled = true, ItemDodgeEnabled = true}
+S.DodgeRevision = 2
 local connections, markers, watches, threats = {}, {}, {}, {}
 local folder, dashHandler
 local nextScan, nextAction, nextSlow = 0, 0, 0
@@ -16735,6 +16736,13 @@ local qteCallbacks = {}
 local attemptedQtes = setmetatable({}, {__mode = "k"})
 local ThreatPolicy = (function()
 local Policy = {}
+-- DodgeRevision = 2: a Gun animation is not evidence of a melee collision.
+function Policy.PredictAnimation(kind)
+    return kind ~= "Gun"
+end
+function Policy.WithinContactWindow(candidate, lead)
+    return candidate >= -.06 and candidate <= lead
+end
 function Policy.Eligible(record, now)
     return not record.Used and not record.ItemAttempted
         and (record.ItemAttempts or 0) < 2 and now >= (record.RetryAt or 0)
@@ -16810,6 +16818,14 @@ local function live(character)
     local h = character and character:FindFirstChildOfClass("Humanoid")
     local r = character and character:FindFirstChild("HumanoidRootPart")
     if character and character.Parent and h and h.Health > 0 and r then return h, r end
+end
+
+local function dodgeBlockReason(character)
+    if UIS:GetFocusedTextBox() then return "Chat / text input focused" end
+    if character:GetAttribute("AbilityActivationLocked") == true then return "Ability activation locked" end
+    for _, state in ipairs({"Ragdolled", "Stunned", "Immobilized", "CombatDisabled", "MovementInputDisabled", "Busy"}) do
+        if States.HasAny(character, {state}) then return "Native state: " .. state end
+    end
 end
 
 local function blocked(character)
@@ -17231,6 +17247,7 @@ impendingThreat = function(root, now)
     updatePing(now)
     local lead = CombatPolicy.LeadTime(S.PingMs, (S.FrameMs or 16.7) / 1000)
     local selected, selectedRoot, bestEta
+    local waitingGun = false
     for player, threat in pairs(threats) do
         local _, attacker = live(threat.Character)
         local reported = ThreatPolicy.ReportFresh(threat, now)
@@ -17243,6 +17260,8 @@ impendingThreat = function(root, now)
             if reported and overlapsCharacter(threat.Reported.CFrame, threat.Reported.Size, LP.Character) then
                 eta = 0
                 threat.Evidence = "Native hitbox"
+            elseif playing and not ThreatPolicy.PredictAnimation(threat.Kind) then
+                waitingGun = true
             elseif playing then
                 local speed = math.max(.1, threat.Track.Speed)
                 local contact = threat.Contact or .16
@@ -17253,16 +17272,24 @@ impendingThreat = function(root, now)
                     end
                 end
                 local candidate = (contact - threat.Track.TimePosition) / speed
-                if candidate >= -.12 and candidate <= lead then
+                if ThreatPolicy.WithinContactWindow(candidate, lead) then
                     local relative = attacker.AssemblyLinearVelocity - root.AssemblyLinearVelocity
-                    if relative.Magnitude > 180 then relative = relative.Unit * 180 end
                     local size = hitboxSizes[threat.Kind]
-                    for _, horizon in ipairs({0, math.clamp(candidate, 0, .18)}) do
+                    -- Predict at contact, not "overlapping now OR at contact".
+                    -- Ignore teleport-like velocity samples rather than inventing a collision.
+                    if size and relative.Magnitude <= 180 then
+                        local horizon = math.max(0, candidate)
                         local cf = attacker.CFrame * hitboxOffset + relative * horizon
-                        if size and overlapsCharacter(cf, size, LP.Character) then
-                            eta = math.max(0, candidate)
-                            threat.Evidence = "Predicted contact"
-                            break
+                        if overlapsCharacter(cf, size, LP.Character) then
+                            local params = RaycastParams.new()
+                            params.FilterType = Enum.RaycastFilterType.Exclude
+                            params.RespectCanCollide = true
+                            params.FilterDescendantsInstances = {LP.Character, threat.Character}
+                            local obstructed = workspace:Raycast(attacker.Position, root.Position - attacker.Position, params)
+                            if not obstructed then
+                                eta = horizon
+                                threat.Evidence = "Predicted contact"
+                            end
                         end
                     end
                 end
@@ -17272,6 +17299,9 @@ impendingThreat = function(root, now)
             end
         end
     end
+    S.ThreatStatus = selected and selected.Evidence
+        or waitingGun and "Gun: waiting for a confirmed overlapping hitbox"
+        or "Watching attack contact"
     return selected, selectedRoot, bestEta
 end
 
@@ -17530,19 +17560,32 @@ usableDodgeItem = function(character, now)
             itemState.WasCooling = cooling
         end
     end
-    if not character or blocked(character) then
+    S.ItemWindowActive = character and (now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"})) or false
+    local reason = "Waiting for character"
+    if character then reason = dodgeBlockReason(character) end
+    if S.ItemWindowActive then
         S.ItemReady = false
-        S.ItemStatus = "Waiting for native recovery / own attack to finish"
+        S.ItemStatus = "Native dodge window active"
         return
     end
-    S.ItemWindowActive = now < itemState.ActiveUntil or States.HasAny(character, {"Dodging"})
+    if reason then
+        S.ItemReady = false
+        S.ItemStatus = reason
+        return
+    end
     if not tool then S.ItemStatus = "Flowstate Dodge item required"; S.ItemReady = false; return end
     if not bindItemFeedback(tool) then S.ItemStatus = "Waiting for native Dodge item runtime"; S.ItemReady = false; return end
     local ready = not tool:GetAttribute("OnCooldown") and tool:GetAttribute("CombatRulesBlocked") ~= true
         and tool.Enabled and now >= itemState.NextAttempt
         and not itemState.Pending and not States.HasAny(character, {"Dodging"})
     S.ItemReady = ready == true
-    S.ItemStatus = ready and "Dodge item ready" or "Native dodge item window / cooldown"
+    S.ItemStatus = ready and "Dodge item ready"
+        or itemState.Pending and "Waiting for server confirmation"
+        or tool:GetAttribute("OnCooldown") and "Server Dodge cooldown"
+        or tool:GetAttribute("CombatRulesBlocked") == true and "Native combat rules block Dodge"
+        or not tool.Enabled and "Dodge tool disabled"
+        or now < itemState.NextAttempt and "Dodge feedback cooldown"
+        or "Native dodge item unavailable"
     return ready and tool or nil
 end
 
@@ -17560,6 +17603,11 @@ tryItemDodge = function(character, root, record, now)
         itemState.Equip = {Character = character, Previous = character:FindFirstChildOfClass("Tool"), Tool = tool}
         humanoid:EquipTool(tool)
         if tool.Parent ~= character then restoreItemEquip(); return false end
+    end
+    -- Equipping can alter state; validate the same threat again immediately before dispatch.
+    if impendingThreat(root, os.clock()) ~= record or dodgeBlockReason(character) then
+        restoreItemEquip()
+        return false
     end
     record.ItemAttempts = (record.ItemAttempts or 0) + 1
     record.ItemAttempted = true
@@ -17606,7 +17654,8 @@ itemDodgeStep = function(now)
             if not itemState.Pending then tryItemDodge(character, root, record, now) end
         end
     end
-    status(S.ItemStatus or "Watching native hitbox threats")
+    status(S.ItemReady and ("Ready · " .. (S.ThreatStatus or "Watching native hitbox threats"))
+        or S.ItemStatus or "Watching native hitbox threats")
 end
 
 stopItemDodge = function()
@@ -18013,6 +18062,7 @@ function S:GetSnapshot()
         Navigation = self.Navigation, QTEPresses = self.Actions,
         ItemRequests = self.ItemRequests, ItemAccepted = self.ItemAccepted, ItemDodged = self.ItemDodged,
         ItemMissed = self.ItemMissed, ItemStatus = self.ItemStatus,
+        DodgeRevision = self.DodgeRevision, ThreatStatus = self.ThreatStatus,
         PingMs = self.PingMs, FrameMs = self.FrameMs,
         DamageObserved = self.DamageObserved, MaxStepMs = self.MaxStepMs}
 end
