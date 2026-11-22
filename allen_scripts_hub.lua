@@ -16727,7 +16727,7 @@ end
 local key = "__ALLEN_MATCH_" .. MODE
 if env[key] then env[key]:Destroy() end
 local S = {HubOnly = true, Enabled = false, Destroyed = false, Status = "Off", Actions = 0, Generation = 0, QTEEnabled = true, ItemDodgeEnabled = true}
-S.DodgeRevision = 2
+S.DodgeRevision = 3
 local connections, markers, watches, threats = {}, {}, {}, {}
 local folder, dashHandler
 local nextScan, nextAction, nextSlow = 0, 0, 0
@@ -16762,6 +16762,7 @@ end)()
 local attackIds = {}
 local attackContacts = {}
 local observeSwing
+local wakeItemDodge
 local hitboxSizes = {Fists = Vector3.new(6, 6, 6), Pole = Vector3.new(7.5, 6, 7.5),
     Katana = Vector3.new(6, 6, 6), Scythe = Vector3.new(6, 6, 6),
     Striker = Vector3.new(6, 6, 6), Gun = Vector3.new(6, 6, 6)}
@@ -16885,6 +16886,7 @@ local function scanThreats()
                             local threat = {Track = track, Character = character, Kind = attackIds[id], Used = false, At = os.clock(), Contact = contact, ContactVerified = attackContacts[id] ~= nil}
                             threats[player] = threat
                             if observeSwing then observeSwing(player, threat) end
+                            if wakeItemDodge then wakeItemDodge() end
                         end
                     end
                     watches[player] = {Animator = animator, Connection = animator.AnimationPlayed:Connect(observeTrack)}
@@ -16944,6 +16946,7 @@ local function reportedHitbox(cf, size)
         threats[owner] = record
     end
     record.Reported = {CFrame = cf, Size = size, At = now}
+    if wakeItemDodge then wakeItemDodge() end
 end
 
 local function espStep()
@@ -17540,8 +17543,15 @@ local function bindItemFeedback(tool)
     local runtime = tool:FindFirstChild("PowerRuntimeRemotes")
     local notify = runtime and runtime:FindFirstChild("Notify")
     if not notify or not notify:IsA("RemoteEvent") then return false end
+    if itemState.ReadyConnection then itemState.ReadyConnection:Disconnect() end
     itemState.NotifyTool = tool
     itemState.NotifyConnection = notify.OnClientEvent:Connect(itemNotify)
+    itemState.ReadyConnection = tool:GetAttributeChangedSignal("OnCooldown"):Connect(function()
+        if not tool:GetAttribute("OnCooldown") and not itemState.Pending then
+            itemState.NextAttempt = 0
+            if wakeItemDodge then wakeItemDodge() end
+        end
+    end)
     return true
 end
 
@@ -17618,7 +17628,7 @@ tryItemDodge = function(character, root, record, now)
     if not ok or accepted ~= true then
         itemState.Pending = nil
         record.ItemAttempted = false
-        record.RetryAt = now + .075
+        record.RetryAt = now + 1/120
         itemState.NextAttempt = record.RetryAt
         restoreItemEquip()
         S.ItemStatus = ok and "Native hotbar declined activation" or "Native hotbar activation failed"
@@ -17658,7 +17668,28 @@ itemDodgeStep = function(now)
         or S.ItemStatus or "Watching native hitbox threats")
 end
 
+local immediateBusy = false
+wakeItemDodge = function()
+    if MODE ~= "dodgeitem" or not S.Enabled or S.Destroyed or immediateBusy then return end
+    local full = env.__ALLEN_MATCH_combat
+    if full and full.Enabled then return end
+    immediateBusy = true
+    local ok, err = pcall(function()
+        local character = LP.Character
+        local _, root = live(character)
+        if not root or not usableDodgeItem(character, os.clock()) then return end
+        local record = impendingThreat(root, os.clock())
+        if record then
+            S.InstantChecks = (S.InstantChecks or 0) + 1
+            tryItemDodge(character, root, record, os.clock())
+        end
+    end)
+    immediateBusy = false
+    if not ok then S.ItemStatus = "Immediate check failed: " .. tostring(err) end
+end
+
 stopItemDodge = function()
+    if itemState.ReadyConnection then itemState.ReadyConnection:Disconnect(); itemState.ReadyConnection = nil end
     local pending = itemState.Pending
     if pending and pending.Tool.Parent then
         pcall(pending.Dispatcher, pending.Tool, "End", Enum.UserInputType.MouseButton1, pending.Quick)
@@ -18062,7 +18093,7 @@ function S:GetSnapshot()
         Navigation = self.Navigation, QTEPresses = self.Actions,
         ItemRequests = self.ItemRequests, ItemAccepted = self.ItemAccepted, ItemDodged = self.ItemDodged,
         ItemMissed = self.ItemMissed, ItemStatus = self.ItemStatus,
-        DodgeRevision = self.DodgeRevision, ThreatStatus = self.ThreatStatus,
+        DodgeRevision = self.DodgeRevision, ThreatStatus = self.ThreatStatus, InstantChecks = self.InstantChecks,
         PingMs = self.PingMs, FrameMs = self.FrameMs,
         DamageObserved = self.DamageObserved, MaxStepMs = self.MaxStepMs}
 end
