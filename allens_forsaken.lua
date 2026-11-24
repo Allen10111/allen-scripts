@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v2
+-- Allens Forsaken Script | standalone bundle v3
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is one second per native action.
 local Factories = {}
@@ -149,21 +149,32 @@ return function(ctx)
                     local occupants = getProperty(properties, "Occupants", {})
                     local count = 0
                     for _, uid in pairs(occupants) do if uid and uid ~= 0 then count += 1 end end
-                    local maxDistance = prompt.MaxActivationDistance
-                    local offset = math.clamp(maxDistance * 0.55, 2, 4.5)
-                    local positions = {}
-                    for _, v in ipairs({Vector3.new(0,0,-offset), Vector3.new(-offset,0,0),
-                        Vector3.new(offset,0,0), Vector3.new(0,0,offset)}) do
-                        positions[#positions+1] = main.CFrame:PointToWorldSpace(v)
-                    end
-                    if root then
-                        table.sort(positions, function(a,b)
-                            return (a-root.Position).Magnitude < (b-root.Position).Magnitude
-                        end)
+                    local positions,positionNames = {},{}
+                    local seats=model:FindFirstChild("Positions")
+                    if seats then
+                        local children=seats:GetChildren()
+                        table.sort(children,function(a,b) return a.Name<b.Name end)
+                        for _,seat in ipairs(children) do
+                            local occupant=occupants[seat.Name]
+                            local free=not occupant or occupant==0 or occupant==player.UserId
+                            local position=seat:IsA("BasePart") and seat.Position
+                                or seat:IsA("Attachment") and seat.WorldPosition
+                            if free and position then
+                                positions[#positions+1]=position
+                                positionNames[#positionNames+1]=seat.Name
+                            end
+                        end
+                    else
+                        local offset=math.clamp(prompt.MaxActivationDistance*.55,2,4.5)
+                        for _,v in ipairs({Vector3.new(0,0,-offset),Vector3.new(-offset,0,0),Vector3.new(offset,0,0),Vector3.new(0,0,offset)}) do
+                            positions[#positions+1]=main.CFrame:PointToWorldSpace(v)
+                            positionNames[#positionNames+1]=tostring(#positions)
+                        end
                     end
                     local descriptor = {
                         Model = model, Binder = binder, Prompt = prompt, Position = main.Position,
                         InteractionPositions = positions, InteractionPosition = positions[1],
+                        PositionNames=positionNames, HasFreePosition=#positions>0,
                         Progress = getProperty(properties, "Counter", 0),
                         MaxProgress = getProperty(properties, "MaxCounter", 0),
                         Completed = getProperty(properties, "Completed", false),
@@ -1170,7 +1181,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=2,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=3,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=1,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
@@ -1253,6 +1264,7 @@ function c:StopNavigation()
         self.PathThread=nil
     end
     self.PathBusy=false
+    if self.PathBlocked then self.PathBlocked:Disconnect(); self.PathBlocked=nil end
     if self.NavOwner and self.NavOwner.Parent then
         local root=self.NavOwner.Parent:FindFirstChild("HumanoidRootPart")
         if root then self.NavOwner:MoveTo(root.Position) end
@@ -1279,43 +1291,52 @@ end
 function c:Navigate(goal,mode)
     local ch,h,root=character()
     if not ch or root.Anchored then return false end
-    if (root.Position-goal).Magnitude<3 then
-        if self.Waypoints then self:StopNavigation() end
+    if (root.Position-goal).Magnitude<2.5 then
+        if self.NavOwner or self.PathBusy or self.Waypoints then self:StopNavigation() end
         return true
     end
-    if not self.PathBusy and (not self.NavGoal or (self.NavGoal-goal).Magnitude>7
-        or os.clock()-self.LastPath>2.5 or not self.Waypoints) and os.clock()-self.LastPath>1.1 then
+    if self.NavGoal and (self.NavGoal-goal).Magnitude>2 then self:StopNavigation() end
+    if self.PathBusy and os.clock()-(self.PathStarted or 0)>5 then
+        self:StopNavigation();self.NavFailureAt=os.clock()
+    end
+    if not self.PathBusy and not self.Waypoints and os.clock()-self.LastPath>.6 then
         self.NavGeneration+=1
         local generation=self.NavGeneration
-        self.NavGoal=goal; self.LastPath=os.clock(); self.PathBusy=true
+        self.NavGoal=goal;self.LastPath=os.clock();self.PathStarted=os.clock();self.PathBusy=true
         self.PathThread=self:Spawn(function()
-            local path=Pathfinding:CreatePath({AgentRadius=2,AgentHeight=5,AgentCanJump=true,WaypointSpacing=5})
+            local path=Pathfinding:CreatePath({AgentRadius=2,AgentHeight=5,AgentCanJump=true,WaypointSpacing=3})
             local ok=pcall(function() path:ComputeAsync(root.Position,goal) end)
             if self.Destroyed or generation~=self.NavGeneration or player.Character~=ch then return end
-            self.PathBusy=false; self.PathThread=nil
+            self.PathBusy=false;self.PathThread=nil
+            if self.PathBlocked then self.PathBlocked:Disconnect();self.PathBlocked=nil end
             if ok and path.Status==Enum.PathStatus.Success then
-                self.Waypoints=path:GetWaypoints(); self.WaypointIndex=math.min(2,#self.Waypoints)
-                self.LastProgress=os.clock(); self.LastPosition=root.Position
+                self.Waypoints=path:GetWaypoints();self.WaypointIndex=math.min(2,#self.Waypoints)
+                self.LastProgress=os.clock();self.LastPosition=root.Position
+                self.PathBlocked=path.Blocked:Connect(function(index)
+                    if generation==self.NavGeneration and index>=self.WaypointIndex then
+                        self.Waypoints=nil;self.NavStatus="Route blocked; recalculating"
+                    end
+                end)
             else
-                self.Waypoints=nil
-                self.NavStatus="No walkable route; retrying"
+                self.Waypoints=nil;self.NavFailureAt=os.clock()
+                self.NavStatus="No walkable route; trying another approach"
             end
         end)
     end
     local waypoints=self.Waypoints
     if waypoints and #waypoints>0 then
         local point=waypoints[self.WaypointIndex]
-        while point and (root.Position-point.Position).Magnitude<3 do
-            self.WaypointIndex+=1; point=waypoints[self.WaypointIndex]
+        while point and (root.Position-point.Position).Magnitude<2.5 do
+            self.WaypointIndex+=1;point=waypoints[self.WaypointIndex]
         end
         if point then
             self.NavOwner=h
             if point.Action==Enum.PathWaypointAction.Jump then h.Jump=true end
             h:MoveTo(point.Position)
-            if not self.LastPosition or (root.Position-self.LastPosition).Magnitude>1.5 then
-                self.LastPosition=root.Position; self.LastProgress=os.clock()
-            elseif os.clock()-(self.LastProgress or os.clock())>2.5 then
-                h.Jump=true; self.Waypoints=nil; self.LastProgress=os.clock()
+            if not self.LastPosition or (root.Position-self.LastPosition).Magnitude>1 then
+                self.LastPosition=root.Position;self.LastProgress=os.clock()
+            elseif os.clock()-(self.LastProgress or os.clock())>2 then
+                h.Jump=true;self:StopNavigation();self.NavFailureAt=os.clock()
             end
         else self.Waypoints=nil end
     end
@@ -1346,36 +1367,57 @@ local function fleePoint(root,threat)
     end
     return best
 end
-local function generatorPosition(desc,root)
-    if typeof(desc.InteractionPosition)=="Vector3" then return desc.InteractionPosition end
-    local position=desc.Position
-    if typeof(position)~="Vector3" then return nil end
-    local away=Vector3.new(root.Position.X-position.X,0,root.Position.Z-position.Z)
-    if away.Magnitude<0.01 then away=Vector3.new(1,0,0) end
-    return position+away.Unit*5
+local farmRecords=setmetatable({},{__mode="k"})
+local function farmRecord(desc)
+    local r=farmRecords[desc.Model]
+    if not r then r={Blocked={},RetryAt=0};farmRecords[desc.Model]=r end
+    return r
+end
+local function generatorPosition(desc,root,r)
+    local positions=desc.InteractionPositions or {}
+    if r.GoalName then
+        for i,name in ipairs(desc.PositionNames or {}) do
+            if name==r.GoalName and (r.Blocked[name] or 0)<=os.clock() then return positions[i] end
+        end
+    end
+    local best,distance,name=nil,math.huge,nil
+    for i,position in ipairs(positions) do
+        local key=desc.PositionNames and desc.PositionNames[i] or tostring(i)
+        if (r.Blocked[key] or 0)<=os.clock() then
+            local d=(root.Position-position).Magnitude
+            if d<distance then best,distance,name=position,d,key end
+        end
+    end
+    r.GoalName=name
+    return best
+end
+local function rejectApproach(desc,r)
+    if r.GoalName then r.Blocked[r.GoalName]=os.clock()+12 end
+    r.GoalName=nil;r.PendingUntil=nil;r.ApproachStarted=nil
+    c:StopNavigation()
+    local _,_,root=character()
+    if not root or not generatorPosition(desc,root,r) then r.RetryAt=os.clock()+12;c.TargetGenerator=nil end
 end
 local function farmTick()
     if not c.State.AutoFarmGenerators and not c.State.AutoPlay then
-        c.NavStatus="Paused"; return
+        if c.NavOwner or c.PathBusy then c:StopNavigation() end
+        c.NavStatus="Paused";return
     end
     local ch,h,root=character()
     if not ch or not survivor() then
         if c.NavOwner or c.PathBusy then c:StopNavigation() end
         safeCall(generators,"Leave")
-        c.NavStatus="Waiting for a survivor round"; return
+        c.TargetGenerator=nil
+        c.NavStatus="Waiting for a survivor round";return
     end
     if c.State.AutoPlay then
         for _,key in ipairs({Enum.KeyCode.W,Enum.KeyCode.A,Enum.KeyCode.S,Enum.KeyCode.D,Enum.KeyCode.Space}) do
-            if UIS:IsKeyDown(key) then c.ManualUntil=os.clock()+2; break end
+            if UIS:IsKeyDown(key) then c.ManualUntil=os.clock()+2;break end
         end
     end
-    if not canAutomate() then
+    if not canAutomate() or safeCall(combat,"IsDefending") then
         if c.NavOwner or c.PathBusy then c:StopNavigation() end
-        c.NavStatus="Manual control; autoplay paused"; return
-    end
-    if safeCall(combat,"IsDefending") then
-        if c.NavOwner or c.PathBusy then c:StopNavigation() end
-        c.NavStatus="Defending"; return
+        c.NavStatus="Manual control or defense; farming paused";return
     end
     local threat,distance=nearestThreat(root.Position)
     if distance<c.State.ThreatRadius then evading=true end
@@ -1383,51 +1425,83 @@ local function farmTick()
     if evading then
         safeCall(generators,"Leave")
         if c.State.AutoPlay then
-            if not fleeGoal or os.clock()-fleeTime>2 then fleeGoal=fleePoint(root,threat); fleeTime=os.clock() end
+            if not fleeGoal or os.clock()-fleeTime>2 then fleeGoal=fleePoint(root,threat);fleeTime=os.clock() end
             c.NavStatus="Evading killer ("..math.floor(distance).." studs)"
-            if fleeGoal then c:Navigate(fleeGoal,"Evading") else c:StopNavigation(); c.NavStatus="Threat nearby; no safe route" end
-        else c.NavStatus="Generator farming paused: killer nearby" end
+            if fleeGoal then c:Navigate(fleeGoal,"Evading") else c:StopNavigation();c.NavStatus="Threat nearby; no safe route" end
+        else
+            if c.NavOwner or c.PathBusy then c:StopNavigation() end
+            c.NavStatus="Generator farming paused: killer nearby"
+        end
         return
     end
-    fleeGoal=nil
-    if os.clock()-c.LastScan>1 then
-        c.LastScan=os.clock()
-        c.Generators=safeCall(generators,"Scan") or {}
-    end
-    local best,bestDistance=nil,math.huge
-    for _,desc in ipairs(c.Generators) do
-        if not desc.Completed and (not desc.Prompt or desc.Prompt.Enabled or desc.IsInteracting) and typeof(desc.Position)=="Vector3" then
-            local d=(desc.Position-root.Position).Magnitude
-            if d<bestDistance then best,bestDistance=desc,d end
-        end
-    end
-    c.TargetGenerator=best
-    if not best then
-        if c.NavOwner or c.PathBusy then c:StopNavigation() end
-        c.NavStatus="No available incomplete generators"; return
-    end
+    if fleeGoal then c:StopNavigation();fleeGoal=nil end
+    -- Continue the active puzzle before looking for another generator.
     if safeCall(generators,"IsInteracting") then
         if c.NavOwner or c.PathBusy then c:StopNavigation() end
+        if c.TargetGenerator then local r=farmRecord(c.TargetGenerator);r.PendingUntil=nil;r.ApproachStarted=nil end
         c.NavStatus="Working on generator puzzle"
-        if os.clock()-c.LastFarm>=c.State.FarmDelay then
-            c.LastFarm=os.clock(); safeCall(generators,"SolveActive")
-        end
+        if os.clock()-c.LastFarm>=c.State.FarmDelay then c.LastFarm=os.clock();safeCall(generators,"SolveActive") end
         return
     end
-    if bestDistance>12 and not c.State.AutoPlay then
-        c.NavStatus="Move near a generator to farm"; return
-    end
-    if c.State.AutoPlay then
-        local goal=generatorPosition(best,root)
-        if not goal then c.NavStatus="Generator approach unavailable"; return end
-        if not c:Navigate(goal,"Generator") and bestDistance>9 then
-            c.NavStatus="Walking to generator ("..math.floor(bestDistance).." studs)"; return
+    if os.clock()-c.LastScan>.6 then c.LastScan=os.clock();c.Generators=safeCall(generators,"Scan") or {} end
+    local best,score=nil,math.huge
+    local previous=c.TargetGenerator and c.TargetGenerator.Model
+    for _,desc in ipairs(c.Generators) do
+        local r=farmRecord(desc)
+        if not desc.Completed and desc.HasFreePosition~=false and (not desc.Prompt or desc.Prompt.Enabled)
+            and typeof(desc.Position)=="Vector3" and r.RetryAt<=os.clock() then
+            local d=(desc.Position-root.Position).Magnitude
+            local range=desc.Prompt and desc.Prompt.MaxActivationDistance or 8
+            local _,danger=nearestThreat(desc.Position)
+            if danger>=c.State.ThreatRadius and (c.State.AutoPlay or d<=range) then
+                local maximum=tonumber(desc.MaxProgress) or 0
+                local progress=maximum>0 and math.clamp((tonumber(desc.Progress) or 0)/maximum,0,1) or 0
+                local candidate=d-progress*8+(tonumber(desc.OccupantCount) or 0)*3
+                -- Keep an eligible target instead of changing routes every scan.
+                if desc.Model==previous then best=desc;break end
+                if candidate<score then best,score=desc,candidate end
+            end
         end
     end
-    if os.clock()-c.LastFarm>=c.State.FarmDelay then
+    if not best then
+        c.TargetGenerator=nil
+        if c.NavOwner or c.PathBusy then c:StopNavigation() end
+        c.NavStatus=c.State.AutoPlay and "Waiting for a safe, free generator" or "Move near a free generator, or enable AutoPlay"
+        return
+    end
+    local r=farmRecord(best)
+    if best.Model~=previous then
+        c:StopNavigation();r.GoalName=nil;r.PendingUntil=nil;r.ApproachStarted=nil
+        r.LastFailure=c.NavFailureAt
+    end
+    c.TargetGenerator=best
+    local goal=generatorPosition(best,root,r)
+    if not goal then r.RetryAt=os.clock()+12;c.TargetGenerator=nil;c:StopNavigation();return end
+    if r.PendingUntil then
+        if os.clock()<r.PendingUntil then c.NavStatus="Waiting for generator entry confirmation";return end
+        rejectApproach(best,r);c.NavStatus="Entry not confirmed; trying another free side";return
+    end
+    if c.State.AutoPlay then
+        r.ApproachStarted=r.ApproachStarted or os.clock()
+        if c.NavFailureAt and c.NavFailureAt~=(r.LastFailure or 0) then
+            r.LastFailure=c.NavFailureAt;rejectApproach(best,r);c.NavStatus="Trying another generator approach";return
+        end
+        if os.clock()-r.ApproachStarted>25 then rejectApproach(best,r);c.NavStatus="Approach timed out; trying another side";return end
+        if not c:Navigate(goal,"Generator") then c.NavStatus="Walking to a free repair position";return end
+    end
+    local range=best.Prompt and best.Prompt.MaxActivationDistance or 8
+    if (root.Position-best.Position).Magnitude>range then
+        if c.State.AutoPlay then rejectApproach(best,r) end
+        c.NavStatus="Move closer to the generator";return
+    end
+    if os.clock()-c.LastFarm>=math.max(c.State.FarmDelay,1.5) then
         c.LastFarm=os.clock()
-        local result=safeCall(generators,"Interact",best)
-        c.NavStatus=result and "Entering generator" or "Waiting for a free generator position"
+        local accepted,reason=safeCall(generators,"Interact",best)
+        if accepted then
+            c:StopNavigation();r.PendingUntil=os.clock()+2.5
+            c.NavStatus="Entering generator; awaiting confirmation"
+        elseif reason=="Waiting for entry response" then c.NavStatus=reason
+        else rejectApproach(best,r);c.NavStatus=tostring(reason or "Entry unavailable; trying another side") end
     end
 end
 function c:ClearGeneratorESP()
