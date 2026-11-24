@@ -1,12 +1,12 @@
--- Allens Forsaken Script | standalone bundle v3
+-- Allens Forsaken Script | standalone bundle v4
 -- RightShift: show/hide. End: unload. Automation starts paused.
--- Puzzle steps are serialized; default pause is one second per native action.
+-- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
 
 Factories.Generators = (function()
 -- Generator and minigame adapter for Allens Forsaken Script.
 -- Factory context: Player, RS, State, Alive(), Spawn(fn), CanAutomate().
--- State.PuzzleStepDelay controls native puzzle actions (default 1s, range 0.4-3s).
+-- State.PuzzleStepDelay controls native puzzle actions (default 0.2s, range 0.1-3s).
 -- Optional test dependencies: Definitions, GeneratorClass, Gears, RunService,
 -- Clock(), ServerClock(), IsSurvivor().
 -- Scan returns {Model, Binder, Prompt, Position, InteractionPosition, InteractionPositions,
@@ -38,7 +38,7 @@ return function(ctx)
     local generation = 0
     local advancing = false
     local nextActionAt = 0
-    local function stepDelay() return math.clamp(tonumber(ctx.State.PuzzleStepDelay) or 1, 0.4, 3) end
+    local function stepDelay() return math.clamp(tonumber(ctx.State.PuzzleStepDelay) or 0.2, 0.1, 3) end
     local function takeAction(r)
         local now = clock()
         if now < nextActionAt or now < r.NextAction then return false end
@@ -1181,9 +1181,9 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=3,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=4,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
-        GeneratorESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=1,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
+        GeneratorESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
     NavOwner=nil,WaypointIndex=1,LastPath=0,LastFarm=0,LastScan=0,LastFailure={},LastStuck=0,Ready=false,Focused=true}
 env.AllensForsaken = c
@@ -1568,7 +1568,7 @@ function c:Set(key,value)
             or value==Enum.KeyCode.Escape or value==Enum.KeyCode.End then return false end
     elseif key=="ThreatRadius" then value=math.clamp(tonumber(value) or 45,20,90)
     elseif key=="FarmDelay" then value=math.clamp(tonumber(value) or 0.8,0.4,2.5)
-    elseif key=="PuzzleStepDelay" then value=math.clamp(tonumber(value) or 1,0.4,3)
+    elseif key=="PuzzleStepDelay" then value=math.clamp(tonumber(value) or 0.2,0.1,3)
     elseif key=="BlockRange" then value=math.clamp(tonumber(value) or 16,8,18)
     else value=value==true end
     self.State[key]=value
@@ -1726,7 +1726,7 @@ detailsLabel.TextWrapped=true; detailsLabel.TextTruncate=Enum.TextTruncate.None;
 heading(pages.Settings,"Settings","Movement keys pause autoplay. End unloads everything.")
 slider(pages.Settings,"ThreatRadius","Killer avoidance distance",20,90,1," studs",1)
 slider(pages.Settings,"FarmDelay","Interaction retry interval",0.4,2.5,0.1," s",2)
-slider(pages.Settings,"PuzzleStepDelay","Pause between puzzle moves",0.4,3,0.1," s",3)
+slider(pages.Settings,"PuzzleStepDelay","Pause between puzzle moves",0.1,3,0.1," s",3)
 slider(pages.Settings,"BlockRange","Maximum block detection",8,18,1," studs",4)
 local keyRow=card(pages.Settings,"Hotkey",66,5)
 label(keyRow,"Show / hide hotkey",UDim2.fromOffset(14,12),UDim2.new(1,-150,0,20),12)
@@ -1740,7 +1740,7 @@ connect(save.Activated,function()
     local ok,err=pcall(function()
         if type(isfolder)~="function" or not isfolder("AllensForsaken") then makefolder("AllensForsaken") end
         writefile(CONFIG,Http:JSONEncode({ThreatRadius=c.State.ThreatRadius,FarmDelay=c.State.FarmDelay,
-            PuzzleStepDelay=c.State.PuzzleStepDelay,GeneratorESP=c.State.GeneratorESP,BlockRange=c.State.BlockRange,Hotkey=c.State.Hotkey.Name}))
+            PuzzlePacingVersion=4,PuzzleStepDelay=c.State.PuzzleStepDelay,GeneratorESP=c.State.GeneratorESP,BlockRange=c.State.BlockRange,Hotkey=c.State.Hotkey.Name}))
     end)
     c:Notify(ok and "Preferences saved. Automation still starts paused." or tostring(err))
 end)
@@ -1819,6 +1819,7 @@ if type(isfile)=="function" and type(readfile)=="function" then
     pcall(function()
         if isfile(CONFIG) then
             local preferences=Http:JSONDecode(readfile(CONFIG))
+            if preferences.PuzzlePacingVersion~=4 then preferences.PuzzleStepDelay=math.min(tonumber(preferences.PuzzleStepDelay) or 0.2,0.2) end
             for _,key in ipairs({"ThreatRadius","FarmDelay","PuzzleStepDelay","BlockRange"}) do if preferences[key]~=nil then c:Set(key,preferences[key]) end end
             if type(preferences.GeneratorESP)=="boolean" then c:Set("GeneratorESP",preferences.GeneratorESP) end
             if type(preferences.Hotkey)=="string" then local ok,key=pcall(function() return Enum.KeyCode[preferences.Hotkey] end); if ok then c:Set("Hotkey",key) end end
