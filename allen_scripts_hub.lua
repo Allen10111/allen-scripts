@@ -21182,15 +21182,16 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-20-r54",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-24-r55",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG,HAJIME=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139,10769763567
 if game.GameId==HAJIME then
     -- Clear a console left by the former automatic route; launching is explicit now.
     local previous=env.HajimeRisingHub
     if type(previous)=="table" and type(previous.Unload)=="function" then pcall(previous.Unload) end
 end
-local gameName=game.GameId==HAJIME and "Hajime Rising" or game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r54 · all features OFF."
+local FORSAKEN=6331902150
+local gameName=game.GameId==FORSAKEN and "Forsaken" or game.GameId==HAJIME and "Hajime Rising" or game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
+local note="Build r55 · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -21219,6 +21220,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
+    {Id="forsakenconsole",Section="Forsaken",Category="Forsaken",Name="Allens Forsaken",Subtitle="Generator farmer, puzzles and character tools · starts paused",Game=FORSAKEN,Action=true},
     {Id="hajimeconsole",Section="Hajime Rising",Category="Hajime Rising",Name="Hajime Rising",Subtitle="Dark console · training, punching bags and configuration profiles",Game=HAJIME,Action=true},
     {Id="silentaim",Section="Jailbreak",Category="Aim",Name="Silent Aim",Subtitle="Jailbreak projectile adapter",Game=245662005,Source="SilentAim"},
     {Id="sky_safeplatforms",Section="Sky Fighters",Category="Movement",Name="Safe Platforms",Subtitle="Whole-arena solid stud floor · partly transparent",Game=8366716517,Key="__ALLEN_SKY_safeplatforms",Source="SkyPlatforms"},
@@ -21303,6 +21305,11 @@ local function snapshot(feature)
     if feature.PCOnly and not UIS.KeyboardEnabled then return {Enabled=false,Status="PC only"} end
     if feature.Unavailable then return {Enabled=false,Status="Unavailable"} end
     if feature.Game and feature.Game~=game.GameId then return {Enabled=false,Status="Open "..feature.Section} end
+    if feature.Id=="forsakenconsole" then
+        local app=hub.ForsakenApp or env.AllensForsaken
+        local running=type(app)=="table" and not app.Destroyed and app.Ready==true
+        return {Enabled=running,Status=running and "Console running · click to re-execute" or "Click Launch to open Forsaken"}
+    end
     if feature.Id=="hajimeconsole" then
         local app=hub.HajimeApp
         local running=type(app)=="table" and app.Alive==true
@@ -21330,7 +21337,33 @@ local function change(feature)
     hub.Busy[feature.Id]=true
     task.spawn(function()
         local ok,err=pcall(function()
-            if feature.Id=="hajimeconsole" then
+            if feature.Id=="forsakenconsole" then
+                local url="https://raw.githubusercontent.com/Allen10111/allen-scripts/main/allens_forsaken.lua"
+                local source=game:HttpGet(url.."?_="..tostring(os.time()).."-"..tostring(math.random(100000,999999)))
+                if hub.Destroyed then return end
+                assert(type(source)=="string" and source:find("%S"),"Forsaken download was empty")
+                local beginning=source:sub(1,512):lower():gsub("^%s+","")
+                assert(not beginning:match("^<!doctype%s+html") and not beginning:match("^<html[%s>]"),"Forsaken download returned an HTML page")
+                assert(type(loadstring)=="function","This executor does not provide loadstring")
+                local run,compileError=loadstring(source,"AllenScripts/Forsaken")
+                assert(run,"Forsaken compilation failed: "..tostring(compileError))
+                if hub.Destroyed then return end
+                local ok,result=pcall(run)
+                local app=env.AllensForsaken
+                if not ok or hub.Destroyed then
+                    if type(app)=="table" and type(app.Destroy)=="function" then pcall(app.Destroy,app) end
+                    if not ok then error(result,0) end
+                    return
+                end
+                assert(type(app)=="table" and app.Ready==true and not app.Destroyed,"Forsaken did not initialize")
+                hub.ForsakenApp=app
+                if app.Gui then
+                    app.Gui.DisplayOrder=hub.Gui.DisplayOrder+10
+                    app.Gui.Enabled=true
+                    local childPanel=app.Gui:FindFirstChild("Panel")
+                    if childPanel then childPanel.Visible=true end
+                end
+            elseif feature.Id=="hajimeconsole" then
                 local url="https://raw.githubusercontent.com/Allen10111/allen-scripts/main/hajime_rising.lua"
                 local source=game:HttpGet(url.."?_="..tostring(os.time()).."-"..tostring(math.random(100000,999999)))
                 if hub.Destroyed then return end
@@ -21411,7 +21444,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R54",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R55",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
@@ -21491,12 +21524,14 @@ buildNavigation=function()
     for _,b in ipairs(navButtons)do b:Destroy()end
     table.clear(navButtons);table.clear(sectionButtons)
     local tabs={{"Home","◇"}}
-    if selectedGame=="Hajime Rising" then
+    if selectedGame=="Forsaken" then
+        tabs[#tabs+1]={"Forsaken","◇"}
+    elseif selectedGame=="Hajime Rising" then
         tabs[#tabs+1]={"Hajime Rising","◇"}
     elseif selectedGame=="Ink Game" then
         tabs[#tabs+1]={"Red Light","◉"};tabs[#tabs+1]={"Dalgona","◇"};tabs[#tabs+1]={"Glass Bridge","◇"};tabs[#tabs+1]={"Hide & Seek","◇"};tabs[#tabs+1]={"Tug of War","◇"};tabs[#tabs+1]={"Jump Rope","◇"};tabs[#tabs+1]={"Auto QTE","◇"};tabs[#tabs+1]={"Movement","↗"}
     else
-        for _,name in ipairs({"Aim","Movement","Rhythm","Alerts","Combat","Minigames","Utility","Hajime Rising"})do
+        for _,name in ipairs({"Aim","Movement","Rhythm","Alerts","Combat","Minigames","Utility","Hajime Rising","Forsaken"})do
             local found=false
             for _,f in ipairs(features)do if f.Category==name and (selectedGame=="All" or f.Section==selectedGame)then found=true;break end end
             if found then tabs[#tabs+1]={name,"◇"} end
@@ -21681,6 +21716,8 @@ end)
 connect(UIS.WindowFocusReleased,function()drag=nil end)
 connect(UIS.InputBegan,function(input,processed)
     if processed or UIS:GetFocusedTextBox()then return end
+    local forsaken=hub.ForsakenApp
+    if forsaken and not forsaken.Destroyed and forsaken.State and input.KeyCode==forsaken.State.Hotkey then return end
     local child=hub.HajimeApp
     if child and child.Alive then
         local config=child.State and child.State.Config
@@ -21693,6 +21730,9 @@ end)
 function hub:Destroy()
     if self.Destroyed then return end
     self.Destroyed=true
+    local forsaken=self.ForsakenApp
+    self.ForsakenApp=nil
+    if type(forsaken)=="table" and type(forsaken.Destroy)=="function" then pcall(forsaken.Destroy,forsaken) end
     local child=self.HajimeApp
     self.HajimeApp=nil
     if type(child)=="table" and type(child.Unload)=="function" then pcall(child.Unload) end
@@ -21718,6 +21758,7 @@ hub.PreviewLayout=function(_,width,height)previewSize=Vector2.new(width,height);
 hub.RestoreLayout=function()previewSize=nil;previewTouch=nil;panelPosition=nil;layout()end
 hub.GetFeatureSnapshot=function(_,id)for _,f in ipairs(features)do if f.Id==id then return snapshot(f)end end end
 hub.LaunchHajime=function()for _,f in ipairs(features)do if f.Id=="hajimeconsole" then change(f);return end end end
+hub.LaunchForsaken=function()for _,f in ipairs(features)do if f.Id=="forsakenconsole" then change(f);return end end end
 buildNavigation();layout()
 task.defer(layout)
 task.spawn(function()
