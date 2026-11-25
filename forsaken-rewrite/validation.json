@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "independentImplementation": true,
   "loadsCursedsaken": false,
   "libraryControls": 284,
@@ -18,13 +18,17 @@
     "UI sidebar labels have distinct padding and no overlapping abbreviations",
     "Infinite Stamina is first in Stamina; Auto Generator is first in Generators",
     "Responsive desktop grid, list view, enabled-only filter and compact phone layout",
-    "Simulated 390x844, 320x568, 844x390, 1024x768 and 1920x1080 layouts: bounded windows, touch-friendly controls and PC grid restoration"
+    "Simulated 390x844, 320x568, 844x390, 1024x768 and 1920x1080 layouts: bounded windows, touch-friendly controls and PC grid restoration",
+    "Single-pointer window drag ownership; unrelated touches neither move nor cancel the drag",
+    "On-screen drag clamping, minimize/restore, and normalized placement through simulated rotation",
+    "Smaller phone portrait and landscape dimensions with PC grid restoration"
   ],
   "limitations": [
     "This is not yet a complete feature-for-feature recreation of Cursedsaken",
     "Not every character-specific behavior has been exercised in a live round",
     "Local configuration does not override server-owned damage, cooldowns or status decisions",
     "Ghost-ability variants and persistent authoritative attack trails are not implemented",
-    "Cursedsaken-specific social/script-user detection and server item granting/deletion are not implemented"
+    "Cursedsaken-specific social/script-user detection and server item granting/deletion are not implemented",
+    "Android and iOS physical-device touch testing has not been performed"
   ]
 }

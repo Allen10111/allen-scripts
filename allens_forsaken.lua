@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v8 / independent feature library
+-- Allens Forsaken Script | standalone bundle v9 / independent feature library
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -2222,9 +2222,10 @@ return function(ctx)
  local logoText=label(logo,"AS",UDim2.new(),UDim2.fromScale(1,1),14,Color3.new(1,1,1));logoText.Font=Enum.Font.GothamBold;logoText.TextXAlignment=Enum.TextXAlignment.Center
  local accentLine=make("Frame",{Size=UDim2.new(1,-32,0,2),Position=UDim2.fromOffset(16,0),BackgroundColor3=C.Accent,BorderSizePixel=0},header)
  make("UIGradient",{Color=ColorSequence.new(C.Accent,Color3.fromRGB(85,211,205))},accentLine)
+ local subtitleLabel
  for _,text in ipairs(header:QueryDescendants("TextLabel")) do
   if text.Text=="Allens Forsaken Script" then text.Position=UDim2.fromOffset(62,11);text.Text="ALLEN / FORSAKEN";text.Font=Enum.Font.GothamBold;text.TextSize=17;text.Size=UDim2.new(1,-230,0,22)
-  elseif text.Text:find("SURVIVOR AUTOMATION",1,true) then text.Position=UDim2.fromOffset(63,34);text.Text="FEATURE LIBRARY";text.TextSize=10;text.TextColor3=C.Muted end
+  elseif text.Text:find("SURVIVOR AUTOMATION",1,true) then subtitleLabel=text;text.Position=UDim2.fromOffset(63,34);text.Text="FEATURE LIBRARY";text.TextSize=10;text.TextColor3=C.Muted end
  end
  local ready=round(make("Frame",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-128,0,17),Size=UDim2.fromOffset(88,25),BackgroundColor3=Color3.fromRGB(23,49,43),BorderSizePixel=0},header),12)
  local readyText=label(ready,"● READY",UDim2.new(),UDim2.fromScale(1,1),10,C.Green);readyText.TextXAlignment=Enum.TextXAlignment.Center;readyText.Font=Enum.Font.GothamBold
@@ -2330,6 +2331,7 @@ return function(ctx)
   end
   app.LibraryResultCount=count
   local searching=ctx.Search.Text:find("%S")~=nil
+  if subtitleLabel then subtitleLabel.Text=app.Compact and (searching and "SEARCH RESULTS" or (app.Tab or "Library"):upper()) or "FEATURE LIBRARY" end
   ctx.Count.Text=count.." visible  ·  "..#app.LibraryRows.." in your library  ·  "..on.." switches on"
   if count==0 then ctx.Count.Text=app.Tab=="Favorites" and "No favorites yet. Use the star on any control." or "No matches. Try a feature name or a character." end
   if app.Tab=="Live" and not searching then ctx.Count.Text="Your character, automation and adapter diagnostics" end
@@ -2386,7 +2388,8 @@ return function(ctx)
   local content=w-side-margin*2
   local columns=not app.LibraryListView and content>=650 and 2 or 1
   self.Columns=columns;app.LibraryColumns=columns
-  grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,124)
+  grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,compact and short and 110 or 124)
+  for _,row in ipairs(app.LibraryRows)do local d=self.Decorations[row.Key];if d then d.Footer.Position=UDim2.fromOffset(40,compact and short and 90 or 103);d.State.Position=UDim2.new(1,-76,0,compact and short and 90 or 103)end end
   local padding=library:FindFirstChildOfClass("UIPadding")
   if padding then padding.PaddingTop=UDim.new(0,compact and 4 or 18);padding.PaddingBottom=UDim.new(0,compact and 10 or 20);padding.PaddingLeft=UDim.new(0,compact and 10 or 20);padding.PaddingRight=UDim.new(0,compact and 10 or 20)end
   for _,row in ipairs(app.LibraryRows)do row.Favorite.Size=UDim2.fromOffset(compact and 40 or 24,compact and 44 or 24);row.Favorite.Position=UDim2.fromOffset(compact and 0 or 7,compact and 0 or 11)end
@@ -2416,7 +2419,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=8,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=9,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
@@ -2927,6 +2930,7 @@ gui=make("ScreenGui",{Name="Allens Forsaken Script",ResetOnSpawn=false,DisplayOr
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling},player:WaitForChild("PlayerGui"))
 c.Gui=gui
 gui.Enabled=false
+pcall(function()gui.ScreenInsets=Enum.ScreenInsets.CoreUISafeInsets end)
 if type(gethui)=="function" then pcall(function()local mount=gethui();if mount then gui.Parent=mount end end) end
 connect(gui.Destroying,function() if not c.Destroyed then c:Destroy() end end)
 panel=make("Frame",{Name="Panel",Size=UDim2.fromOffset(620,530),Position=UDim2.new(0.5,-310,0.5,-265),
@@ -3019,6 +3023,7 @@ local function slider(page,key,title,lo,hi,step,suffix,order)
     local function update(x) c:Set(key,lo+math.floor(math.clamp((x-bar.AbsolutePosition.X)/math.max(1,bar.AbsoluteSize.X),0,1)*(hi-lo)/step+0.5)*step) end
     connect(hit.InputBegan,function(input)
         if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+            if dragging or draggingSlider then return end
             draggingSlider={Input=input,Update=update}; update(input.Position.X)
         end
     end)
@@ -3208,7 +3213,8 @@ toastLabel.TextWrapped=true; toastLabel.TextTruncate=Enum.TextTruncate.None
 local function fit()
     local camera=workspace.CurrentCamera
     if not camera then return end
-    local v=c.PreviewViewport or camera.ViewportSize
+    local available=gui.AbsoluteSize
+    local v=c.PreviewViewport or (available.X>200 and available.Y>200 and available or camera.ViewportSize)
     local keyboardOpen=false
     if not c.PreviewViewport and UIS.OnScreenKeyboardVisible and UIS.OnScreenKeyboardPosition.Y>260 then
         keyboardOpen=true
@@ -3217,11 +3223,11 @@ local function fit()
     local w=math.min(1040,math.max(280,v.X-24))
     local h=math.min(780,math.max(230,v.Y-80))
     if v.X<700 then
-        w=math.min(430,v.X-24);h=math.min(560,math.floor(v.Y*.72),v.Y-80)
+        w=math.min(330,math.floor(v.X*.86),v.X-24);h=math.min(460,math.floor(v.Y*.60),v.Y-80)
     elseif v.Y<550 then
-        w=math.min(650,math.floor(v.X*.82));h=math.min(390,math.floor(v.Y*.86),v.Y-48)
+        w=math.min(520,math.floor(v.X*.66));h=math.min(330,math.floor(v.Y*.80),v.Y-60)
     elseif UIS.TouchEnabled and not UIS.KeyboardEnabled then
-        w=math.min(850,v.X-40);h=math.min(620,math.floor(v.Y*.78))
+        w=math.min(740,math.floor(v.X*.78));h=math.min(560,math.floor(v.Y*.70))
     end
     if keyboardOpen then h=math.min(h+180,v.Y-16) end
     c.WindowWidth=w;c.WindowHeight=h
@@ -3244,13 +3250,15 @@ local function fit()
         page.Size=UDim2.new(1,c.Compact and 0 or -132,1,-48)
     end
     if c.UI then c.UI:Layout(w,h,c.Compact) end
-    local x,y=panel.AbsolutePosition.X,panel.AbsolutePosition.Y
+    local x,y=panel.Position.X.Offset,panel.Position.Y.Offset
+    if c.DragNormalized and c.WindowFitted and not dragging then x=8+c.DragNormalized.X*math.max(0,v.X-w-16);y=8+c.DragNormalized.Y*math.max(0,v.Y-(minimized and 58 or h)-16) end
     if not c.WindowFitted then x=(v.X-w)/2;y=(v.Y-h)/2;c.WindowFitted=true end
     panel.Position=UDim2.fromOffset(math.clamp(x,8,math.max(8,v.X-w-8)),math.clamp(y,8,math.max(8,v.Y-(minimized and 58 or h)-8)))
 end
 pcall(function()
     connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardVisible"),fit)
     connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardPosition"),fit)
+    connect(gui:GetPropertyChangedSignal("AbsoluteSize"),fit)
 end)
 function c:SetMinimized(value)
     minimized=value==true;body.Visible=not minimized;minimize.Text=minimized and "+" or "-";fit()
@@ -3262,23 +3270,50 @@ function c:RestoreLayout()
     c.PreviewViewport=nil;c.WindowFitted=false;fit()
 end
 connect(minimize.Activated,function()c:SetMinimized(not minimized)end)
-connect(header.InputBegan,function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
-        dragging={Input=input,Origin=input.Position,Position=panel.AbsolutePosition}
+-- One pointer owns a drag. A second finger cannot cancel or hijack it.
+local dragSurface=make("TextButton",{Name="WindowDragSurface",Text="",BackgroundTransparency=1,AutoButtonColor=false,
+    Position=UDim2.new(),Size=UDim2.new(1,-100,1,0),Active=true,Selectable=false,ZIndex=20},header)
+function c:MoveWindowTo(position)
+    local camera=workspace.CurrentCamera
+    local v=self.PreviewViewport or gui.AbsoluteSize
+    if v.X<100 or v.Y<100 then v=camera and camera.ViewportSize or Vector2.new(390,844) end
+    local width,height=panel.Size.X.Offset,panel.Size.Y.Offset
+    local dx,dy=math.max(0,v.X-width-16),math.max(0,v.Y-height-16)
+    local x=math.clamp(position.X,8,8+dx)
+    local y=math.clamp(position.Y,8,8+dy)
+    panel.Position=UDim2.fromOffset(x,y)
+    self.DragNormalized=Vector2.new(dx>0 and (x-8)/dx or 0,dy>0 and (y-8)/dy or 0)
+end
+function c:BeginWindowDrag(pointer,position,isMouse)
+    if dragging or draggingSlider then return false end
+    dragging={Pointer=pointer,Mouse=isMouse==true,Origin=position,Position=Vector2.new(panel.Position.X.Offset,panel.Position.Y.Offset)}
+    return true
+end
+function c:UpdateWindowDrag(pointer,position)
+    if not dragging or dragging.Pointer~=pointer then return false end
+    self:MoveWindowTo(dragging.Position+position-dragging.Origin)
+    return true
+end
+function c:EndWindowDrag(pointer)
+    if dragging and dragging.Pointer==pointer then dragging=nil;return true end
+    return false
+end
+connect(dragSurface.InputBegan,function(input)
+    if input.UserInputType==Enum.UserInputType.Touch or input.UserInputType==Enum.UserInputType.MouseButton1 then
+        c:BeginWindowDrag(input,Vector2.new(input.Position.X,input.Position.Y),input.UserInputType==Enum.UserInputType.MouseButton1)
     end
 end)
 connect(UIS.InputChanged,function(input)
-    if draggingSlider and (input.UserInputType==Enum.UserInputType.MouseMovement or input==draggingSlider.Input) then
-        draggingSlider.Update(input.Position.X)
-    elseif dragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input==dragging.Input) then
-        local v=workspace.CurrentCamera.ViewportSize
-        local delta=input.Position-dragging.Origin
-        panel.Position=UDim2.fromOffset(math.clamp(dragging.Position.X+delta.X,8,math.max(8,v.X-panel.AbsoluteSize.X-8)),
-            math.clamp(dragging.Position.Y+delta.Y,8,math.max(8,v.Y-panel.AbsoluteSize.Y-48)))
+    if draggingSlider then
+        local owner=draggingSlider.Input
+        if input==owner or owner.UserInputType==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseMovement then draggingSlider.Update(input.Position.X) end
+    elseif dragging and (input==dragging.Pointer or dragging.Mouse and input.UserInputType==Enum.UserInputType.MouseMovement) then
+        c:UpdateWindowDrag(dragging.Pointer,Vector2.new(input.Position.X,input.Position.Y))
     end
 end)
 connect(UIS.InputEnded,function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=nil; draggingSlider=nil end
+    if dragging and (input==dragging.Pointer or dragging.Mouse and input.UserInputType==Enum.UserInputType.MouseButton1) then c:EndWindowDrag(dragging.Pointer) end
+    if draggingSlider and (input==draggingSlider.Input or draggingSlider.Input.UserInputType==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseButton1) then draggingSlider=nil end
 end)
 connect(UIS.InputBegan,function(input,processed)
     if captureKey and input.UserInputType==Enum.UserInputType.Keyboard then

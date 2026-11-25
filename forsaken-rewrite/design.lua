@@ -33,9 +33,10 @@ return function(ctx)
  local logoText=label(logo,"AS",UDim2.new(),UDim2.fromScale(1,1),14,Color3.new(1,1,1));logoText.Font=Enum.Font.GothamBold;logoText.TextXAlignment=Enum.TextXAlignment.Center
  local accentLine=make("Frame",{Size=UDim2.new(1,-32,0,2),Position=UDim2.fromOffset(16,0),BackgroundColor3=C.Accent,BorderSizePixel=0},header)
  make("UIGradient",{Color=ColorSequence.new(C.Accent,Color3.fromRGB(85,211,205))},accentLine)
+ local subtitleLabel
  for _,text in ipairs(header:QueryDescendants("TextLabel")) do
   if text.Text=="Allens Forsaken Script" then text.Position=UDim2.fromOffset(62,11);text.Text="ALLEN / FORSAKEN";text.Font=Enum.Font.GothamBold;text.TextSize=17;text.Size=UDim2.new(1,-230,0,22)
-  elseif text.Text:find("SURVIVOR AUTOMATION",1,true) then text.Position=UDim2.fromOffset(63,34);text.Text="FEATURE LIBRARY";text.TextSize=10;text.TextColor3=C.Muted end
+  elseif text.Text:find("SURVIVOR AUTOMATION",1,true) then subtitleLabel=text;text.Position=UDim2.fromOffset(63,34);text.Text="FEATURE LIBRARY";text.TextSize=10;text.TextColor3=C.Muted end
  end
  local ready=round(make("Frame",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-128,0,17),Size=UDim2.fromOffset(88,25),BackgroundColor3=Color3.fromRGB(23,49,43),BorderSizePixel=0},header),12)
  local readyText=label(ready,"● READY",UDim2.new(),UDim2.fromScale(1,1),10,C.Green);readyText.TextXAlignment=Enum.TextXAlignment.Center;readyText.Font=Enum.Font.GothamBold
@@ -141,6 +142,7 @@ return function(ctx)
   end
   app.LibraryResultCount=count
   local searching=ctx.Search.Text:find("%S")~=nil
+  if subtitleLabel then subtitleLabel.Text=app.Compact and (searching and "SEARCH RESULTS" or (app.Tab or "Library"):upper()) or "FEATURE LIBRARY" end
   ctx.Count.Text=count.." visible  ·  "..#app.LibraryRows.." in your library  ·  "..on.." switches on"
   if count==0 then ctx.Count.Text=app.Tab=="Favorites" and "No favorites yet. Use the star on any control." or "No matches. Try a feature name or a character." end
   if app.Tab=="Live" and not searching then ctx.Count.Text="Your character, automation and adapter diagnostics" end
@@ -197,7 +199,8 @@ return function(ctx)
   local content=w-side-margin*2
   local columns=not app.LibraryListView and content>=650 and 2 or 1
   self.Columns=columns;app.LibraryColumns=columns
-  grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,124)
+  grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,compact and short and 110 or 124)
+  for _,row in ipairs(app.LibraryRows)do local d=self.Decorations[row.Key];if d then d.Footer.Position=UDim2.fromOffset(40,compact and short and 90 or 103);d.State.Position=UDim2.new(1,-76,0,compact and short and 90 or 103)end end
   local padding=library:FindFirstChildOfClass("UIPadding")
   if padding then padding.PaddingTop=UDim.new(0,compact and 4 or 18);padding.PaddingBottom=UDim.new(0,compact and 10 or 20);padding.PaddingLeft=UDim.new(0,compact and 10 or 20);padding.PaddingRight=UDim.new(0,compact and 10 or 20)end
   for _,row in ipairs(app.LibraryRows)do row.Favorite.Size=UDim2.fromOffset(compact and 40 or 24,compact and 44 or 24);row.Favorite.Position=UDim2.fromOffset(compact and 0 or 7,compact and 0 or 11)end
