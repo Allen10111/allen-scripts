@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v7 / independent feature library
+-- Allens Forsaken Script | standalone bundle v8 / independent feature library
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -2350,26 +2350,46 @@ return function(ctx)
   local short=h<490
   rail.Size=UDim2.new(0,190,1,compact and -48 or 0)
   rail.BackgroundTransparency=0;rail.BackgroundColor3=C.BG
+  rail.Position=UDim2.fromOffset(0,compact and 60 or 0)
+  rail.Size=UDim2.new(0,190,1,compact and -60 or 0)
+  local index=0
+  for _,name in ipairs(order)do local entry=self.Navigation[name];if entry then
+   entry.Button.Position=UDim2.fromOffset(10,44+index*(compact and 48 or 44));entry.Button.Size=UDim2.fromOffset(170,compact and 44 or 38);index+=1
+  end end
+  rail.CanvasSize=UDim2.fromOffset(0,56+index*(compact and 48 or 44))
   local x=side+margin
-  ctx.Search.Position=UDim2.fromOffset(compact and 54 or x,12)
-  ctx.Search.Size=UDim2.new(1,-(compact and 68 or side+margin*2),0,40)
+  ctx.Search.Position=UDim2.fromOffset(compact and 64 or x,12)
+  ctx.Search.Size=UDim2.new(1,-(compact and 78 or side+margin*2),0,40)
+  ctx.NavToggle.Position=UDim2.fromOffset(10,12);ctx.NavToggle.Size=UDim2.fromOffset(44,40)
+  ctx.Minimize.Size=UDim2.fromOffset(compact and 40 or 30,compact and 40 or 30)
+  ctx.Close.Size=ctx.Minimize.Size
+  ctx.Minimize.Position=UDim2.new(1,compact and -90 or -84,0,compact and 9 or 13)
+  ctx.Close.Position=UDim2.new(1,compact and -46 or -44,0,compact and 9 or 13)
+  for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text=="ALLEN / FORSAKEN" then text.TextSize=compact and (w<340 and 12 or 14) or 17;text.Size=UDim2.new(1,compact and -160 or -230,0,22)end end
   local padding=ctx.Search:FindFirstChildOfClass("UIPadding");if padding then padding.PaddingRight=UDim.new(0,compact and 36 or 66) end
-  clear.Position=UDim2.new(1,-margin-32,0,18);shortcut.Position=UDim2.new(1,-margin-58,0,20)
-  hero.Position=UDim2.fromOffset(x,short and 62 or 68);hero.Size=UDim2.new(1,-side-margin*2,0,short and 46 or 90)
+  clear.Size=UDim2.fromOffset(compact and 40 or 28,compact and 40 or 28)
+  clear.Position=UDim2.new(1,-margin-(compact and 40 or 32),0,compact and 12 or 18);shortcut.Position=UDim2.new(1,-margin-58,0,20)
+  hero.Visible=not(compact and short)
+  hero.Position=UDim2.fromOffset(x,68);hero.Size=UDim2.new(1,-side-margin*2,0,compact and 72 or 90)
   ctx.Title.TextSize=short and 17 or compact and 21 or 24
   ctx.Title.Position=UDim2.fromOffset(18,short and 7 or 13)
   ctx.Count.Visible=not short
   metric.Visible=not compact and not short
   ready.Visible=w>=650;ctx.Badge.Visible=false
-  local filterY=short and 118 or 170
-  filters.Position=UDim2.fromOffset(x,filterY);filters.Size=UDim2.new(1,-side-margin*2,0,30)
+  local filterY=compact and (short and 62 or 150) or 170
+  filters.Position=UDim2.fromOffset(x,filterY);filters.Size=UDim2.new(1,-side-margin*2,0,compact and 40 or 30)
+  local chipWidth=compact and math.min(100,(w-side-margin*2-12)/3) or 80
+  for i,key in ipairs({"all","enabled","favorites"})do local control=chips[key];control.Position=UDim2.fromOffset((i-1)*(chipWidth+(compact and 6 or 8)),0);control.Size=UDim2.fromOffset(chipWidth,compact and 40 or 30)end
   view.Visible=not compact
-  local top=filterY+44
+  local top=filterY+(compact and 52 or 44)
   for _,page in pairs(ctx.Pages) do page.Position=UDim2.fromOffset(side,top);page.Size=UDim2.new(1,-side,1,-top-8) end
   local content=w-side-margin*2
   local columns=not app.LibraryListView and content>=650 and 2 or 1
   self.Columns=columns;app.LibraryColumns=columns
   grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,124)
+  local padding=library:FindFirstChildOfClass("UIPadding")
+  if padding then padding.PaddingTop=UDim.new(0,compact and 4 or 18);padding.PaddingBottom=UDim.new(0,compact and 10 or 20);padding.PaddingLeft=UDim.new(0,compact and 10 or 20);padding.PaddingRight=UDim.new(0,compact and 10 or 20)end
+  for _,row in ipairs(app.LibraryRows)do row.Favorite.Size=UDim2.fromOffset(compact and 40 or 24,compact and 44 or 24);row.Favorite.Position=UDim2.fromOffset(compact and 0 or 7,compact and 0 or 11)end
   shadowLayout();self:Refresh()
  end
  connect(game:GetService("UserInputService").InputBegan,function(input,processed)
@@ -2396,7 +2416,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=7,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=8,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
@@ -3189,8 +3209,21 @@ local function fit()
     local camera=workspace.CurrentCamera
     if not camera then return end
     local v=c.PreviewViewport or camera.ViewportSize
+    local keyboardOpen=false
+    if not c.PreviewViewport and UIS.OnScreenKeyboardVisible and UIS.OnScreenKeyboardPosition.Y>260 then
+        keyboardOpen=true
+        v=Vector2.new(v.X,math.min(v.Y,UIS.OnScreenKeyboardPosition.Y-12))
+    end
     local w=math.min(1040,math.max(280,v.X-24))
     local h=math.min(780,math.max(230,v.Y-80))
+    if v.X<700 then
+        w=math.min(430,v.X-24);h=math.min(560,math.floor(v.Y*.72),v.Y-80)
+    elseif v.Y<550 then
+        w=math.min(650,math.floor(v.X*.82));h=math.min(390,math.floor(v.Y*.86),v.Y-48)
+    elseif UIS.TouchEnabled and not UIS.KeyboardEnabled then
+        w=math.min(850,v.X-40);h=math.min(620,math.floor(v.Y*.78))
+    end
+    if keyboardOpen then h=math.min(h+180,v.Y-16) end
     c.WindowWidth=w;c.WindowHeight=h
     c.Compact=v.X<700 or v.Y<550
     scale.Scale=1
@@ -3215,6 +3248,10 @@ local function fit()
     if not c.WindowFitted then x=(v.X-w)/2;y=(v.Y-h)/2;c.WindowFitted=true end
     panel.Position=UDim2.fromOffset(math.clamp(x,8,math.max(8,v.X-w-8)),math.clamp(y,8,math.max(8,v.Y-(minimized and 58 or h)-8)))
 end
+pcall(function()
+    connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardVisible"),fit)
+    connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardPosition"),fit)
+end)
 function c:SetMinimized(value)
     minimized=value==true;body.Visible=not minimized;minimize.Text=minimized and "+" or "-";fit()
 end
@@ -3281,7 +3318,7 @@ for name,factory in pairs(Factories) do
 end
 c.Adapters={Movement=move,Combat=combat,Generators=generators,Suite=suite}
 c.UI=UIFactory({App=c,Palette=C,Gui=gui,Panel=panel,Body=body,Header=header,Rail=rail,Tabs=tabs,Pages=pages,
-    Search=searchBox,LibraryHeader=libraryHeader,Title=libraryTitle,Count=libraryCount,Badge=badge,
+    Search=searchBox,LibraryHeader=libraryHeader,Title=libraryTitle,Count=libraryCount,Badge=badge,NavToggle=navToggle,Minimize=minimize,Close=close,
     Make=make,Label=label,Button=button,Round=round,Connect=connect,Refresh=function()refreshLibrary()end})
 local plainRefresh=refreshLibrary
 refreshLibrary=function()plainRefresh();if c.UI then c.UI:Refresh()end end

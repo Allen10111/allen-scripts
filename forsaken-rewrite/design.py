@@ -6,8 +6,8 @@ def add_design(s):
   assert s.count(a)==1,('design anchor',a[:100])
   s=s.replace(a,b,1)
  s=s.replace('"Generators+"','"Generators"').replace('"Combat+"','"Combat"')
- once('standalone bundle v6 / independent feature suite','standalone bundle v7 / independent feature library')
- once('local c = {Version=6,','local c = {Version=7,')
+ once('standalone bundle v6 / independent feature suite','standalone bundle v8 / independent feature library')
+ once('local c = {Version=6,','local c = {Version=8,')
  once('c.Gui=gui','c.Gui=gui\ngui.Enabled=false\nif type(gethui)=="function" then pcall(function()local mount=gethui();if mount then gui.Parent=mount end end) end')
  once('    c.Tab=name\n    if c.Search then','    c.Tab=name\n    if pages.Library then pages.Library.CanvasPosition=Vector2.zero end\n    if c.Search then')
  once('c.Ready=true','c.Ready=true\nfit();gui.Enabled=true')
@@ -20,10 +20,30 @@ for _,row in ipairs(c.LibraryRows) do row.Category=organized[row.Key] or row.Cat
 for i,row in ipairs(c.LibraryRows) do''')
  once('local w=math.min(860,','local w=math.min(1040,')
  once('local h=math.min(720,','local h=math.min(780,')
+ once('    local v=c.PreviewViewport or camera.ViewportSize','''    local v=c.PreviewViewport or camera.ViewportSize
+    local keyboardOpen=false
+    if not c.PreviewViewport and UIS.OnScreenKeyboardVisible and UIS.OnScreenKeyboardPosition.Y>260 then
+        keyboardOpen=true
+        v=Vector2.new(v.X,math.min(v.Y,UIS.OnScreenKeyboardPosition.Y-12))
+    end''')
+ once('    c.WindowWidth=w;c.WindowHeight=h','''    if v.X<700 then
+        w=math.min(430,v.X-24);h=math.min(560,math.floor(v.Y*.72),v.Y-80)
+    elseif v.Y<550 then
+        w=math.min(650,math.floor(v.X*.82));h=math.min(390,math.floor(v.Y*.86),v.Y-48)
+    elseif UIS.TouchEnabled and not UIS.KeyboardEnabled then
+        w=math.min(850,v.X-40);h=math.min(620,math.floor(v.Y*.78))
+    end
+    if keyboardOpen then h=math.min(h+180,v.Y-16) end
+    c.WindowWidth=w;c.WindowHeight=h''')
+ once('function c:SetMinimized(value)','''pcall(function()
+    connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardVisible"),fit)
+    connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardPosition"),fit)
+end)
+function c:SetMinimized(value)''')
  once('    local x,y=panel.AbsolutePosition.X,panel.AbsolutePosition.Y','    if c.UI then c.UI:Layout(w,h,c.Compact) end\n    local x,y=panel.AbsolutePosition.X,panel.AbsolutePosition.Y')
  once('c.Adapters={Movement=move,Combat=combat,Generators=generators,Suite=suite}', '''c.Adapters={Movement=move,Combat=combat,Generators=generators,Suite=suite}
 c.UI=UIFactory({App=c,Palette=C,Gui=gui,Panel=panel,Body=body,Header=header,Rail=rail,Tabs=tabs,Pages=pages,
-    Search=searchBox,LibraryHeader=libraryHeader,Title=libraryTitle,Count=libraryCount,Badge=badge,
+    Search=searchBox,LibraryHeader=libraryHeader,Title=libraryTitle,Count=libraryCount,Badge=badge,NavToggle=navToggle,Minimize=minimize,Close=close,
     Make=make,Label=label,Button=button,Round=round,Connect=connect,Refresh=function()refreshLibrary()end})
 local plainRefresh=refreshLibrary
 refreshLibrary=function()plainRefresh();if c.UI then c.UI:Refresh()end end

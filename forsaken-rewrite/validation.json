@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "independentImplementation": true,
   "loadsCursedsaken": false,
   "libraryControls": 284,
@@ -17,7 +17,8 @@
     "Suite cleanup and stopping requests after destruction",
     "UI sidebar labels have distinct padding and no overlapping abbreviations",
     "Infinite Stamina is first in Stamina; Auto Generator is first in Generators",
-    "Responsive desktop grid, list view, enabled-only filter and compact phone layout"
+    "Responsive desktop grid, list view, enabled-only filter and compact phone layout",
+    "Simulated 390x844, 320x568, 844x390, 1024x768 and 1920x1080 layouts: bounded windows, touch-friendly controls and PC grid restoration"
   ],
   "limitations": [
     "This is not yet a complete feature-for-feature recreation of Cursedsaken",
