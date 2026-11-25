@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v13 / independent feature library
+-- Allens Forsaken Script | standalone bundle v14 / independent feature library
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -2302,6 +2302,13 @@ return function(ctx)
   local footer=label(row.Card,row.Category:upper(),UDim2.fromOffset(40,103),UDim2.new(1,-120,0,15),9,C.Muted)
   local stateLabel=label(row.Card,"",UDim2.new(1,-76,0,103),UDim2.fromOffset(60,15),9,C.Muted);stateLabel.TextXAlignment=Enum.TextXAlignment.Right;stateLabel.Font=Enum.Font.GothamBold
   ui.Decorations[row.Key]={Footer=footer,State=stateLabel}
+  row.TextLayout={}
+  for _,text in ipairs(row.Card:GetChildren())do
+   if text:IsA("TextLabel") and text~=footer and text~=stateLabel then
+    row.TextLayout[#row.TextLayout+1]={Object=text,Position=text.Position,Size=text.Size,Wrapped=text.TextWrapped,Alignment=text.TextYAlignment,
+     Description=text.Position.Y.Offset>=30 and text.Position.X.Scale==0}
+   end
+  end
   local stroke=row.Card:FindFirstChildOfClass("UIStroke")
   if stroke then stroke.Color=C.Line end
   connect(row.Card.MouseEnter,function()if stroke then stroke.Color=Color3.fromRGB(91,84,134)end end)
@@ -2417,11 +2424,19 @@ return function(ctx)
    clear.Visible=false
   end
   for _,row in ipairs(app.LibraryRows)do
-   for _,text in ipairs(row.Card:GetChildren())do
-    if text:IsA("TextLabel") and text.TextWrapped then
-     if not text:GetAttribute("DesktopY") then text:SetAttribute("DesktopY",text.Position.Y.Offset) end
-     text.Position=UDim2.new(text.Position.X.Scale,text.Position.X.Offset,0,compact and 34 or text:GetAttribute("DesktopY"))
-     text.Size=UDim2.new(text.Size.X.Scale,text.Size.X.Offset,0,compact and 22 or 48)
+   for _,item in ipairs(row.TextLayout)do
+    local text=item.Object
+    text.Position=item.Position;text.Size=item.Size;text.TextWrapped=item.Wrapped;text.TextYAlignment=item.Alignment
+    if compact then
+     if item.Description then
+      text.Position=UDim2.new(item.Position.X.Scale,item.Position.X.Offset,0,36)
+      text.Size=UDim2.new(item.Size.X.Scale,item.Size.X.Offset,0,30)
+      text.TextWrapped=true;text.TextYAlignment=Enum.TextYAlignment.Top
+     elseif item.Position.X.Scale==0 then
+      text.Position=UDim2.new(0,item.Position.X.Offset,0,10)
+      text.Size=UDim2.new(item.Size.X.Scale,item.Size.X.Offset,0,22)
+      text.TextWrapped=false;text.TextYAlignment=Enum.TextYAlignment.Center
+     end
      text.TextTruncate=Enum.TextTruncate.AtEnd
     end
    end
@@ -2453,7 +2468,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=13,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=14,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,

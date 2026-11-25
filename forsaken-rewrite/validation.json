@@ -1,5 +1,5 @@
 {
-  "version": 13,
+  "version": 14,
   "independentImplementation": true,
   "loadsCursedsaken": false,
   "libraryControls": 284,
@@ -22,7 +22,8 @@
     "Single-pointer window drag ownership; unrelated touches neither move nor cancel the drag",
     "Automatic safe-area mobile sizing: bounds checked across eight phone/tablet portrait and landscape dimensions; landscape target 59% width and 79% height with readable minimums",
     "Compact mobile header 44px, landscape search/filter toolbar 56px, mobile feature rows 78px; desktop header restoration",
-    "Unbounded drag: negative coordinates and positions beyond viewport edges; minimize preserves offscreen placement"
+    "Unbounded drag: negative coordinates and positions beyond viewport edges; minimize preserves offscreen placement",
+    "Mobile card titles occupy y10\u201332 and descriptions y36\u201366; layout saves and restores original desktop text geometry"
   ],
   "limitations": [
     "This is not yet a complete feature-for-feature recreation of Cursedsaken",

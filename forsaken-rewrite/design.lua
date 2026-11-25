@@ -113,6 +113,13 @@ return function(ctx)
   local footer=label(row.Card,row.Category:upper(),UDim2.fromOffset(40,103),UDim2.new(1,-120,0,15),9,C.Muted)
   local stateLabel=label(row.Card,"",UDim2.new(1,-76,0,103),UDim2.fromOffset(60,15),9,C.Muted);stateLabel.TextXAlignment=Enum.TextXAlignment.Right;stateLabel.Font=Enum.Font.GothamBold
   ui.Decorations[row.Key]={Footer=footer,State=stateLabel}
+  row.TextLayout={}
+  for _,text in ipairs(row.Card:GetChildren())do
+   if text:IsA("TextLabel") and text~=footer and text~=stateLabel then
+    row.TextLayout[#row.TextLayout+1]={Object=text,Position=text.Position,Size=text.Size,Wrapped=text.TextWrapped,Alignment=text.TextYAlignment,
+     Description=text.Position.Y.Offset>=30 and text.Position.X.Scale==0}
+   end
+  end
   local stroke=row.Card:FindFirstChildOfClass("UIStroke")
   if stroke then stroke.Color=C.Line end
   connect(row.Card.MouseEnter,function()if stroke then stroke.Color=Color3.fromRGB(91,84,134)end end)
@@ -228,11 +235,19 @@ return function(ctx)
    clear.Visible=false
   end
   for _,row in ipairs(app.LibraryRows)do
-   for _,text in ipairs(row.Card:GetChildren())do
-    if text:IsA("TextLabel") and text.TextWrapped then
-     if not text:GetAttribute("DesktopY") then text:SetAttribute("DesktopY",text.Position.Y.Offset) end
-     text.Position=UDim2.new(text.Position.X.Scale,text.Position.X.Offset,0,compact and 34 or text:GetAttribute("DesktopY"))
-     text.Size=UDim2.new(text.Size.X.Scale,text.Size.X.Offset,0,compact and 22 or 48)
+   for _,item in ipairs(row.TextLayout)do
+    local text=item.Object
+    text.Position=item.Position;text.Size=item.Size;text.TextWrapped=item.Wrapped;text.TextYAlignment=item.Alignment
+    if compact then
+     if item.Description then
+      text.Position=UDim2.new(item.Position.X.Scale,item.Position.X.Offset,0,36)
+      text.Size=UDim2.new(item.Size.X.Scale,item.Size.X.Offset,0,30)
+      text.TextWrapped=true;text.TextYAlignment=Enum.TextYAlignment.Top
+     elseif item.Position.X.Scale==0 then
+      text.Position=UDim2.new(0,item.Position.X.Offset,0,10)
+      text.Size=UDim2.new(item.Size.X.Scale,item.Size.X.Offset,0,22)
+      text.TextWrapped=false;text.TextYAlignment=Enum.TextYAlignment.Center
+     end
      text.TextTruncate=Enum.TextTruncate.AtEnd
     end
    end
