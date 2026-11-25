@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v11 / independent feature library
+-- Allens Forsaken Script | standalone bundle v12 / independent feature library
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -2347,6 +2347,11 @@ return function(ctx)
  end
  function ui:Layout(w,h,compact)
   if self.Destroyed then return end
+  header.Size=UDim2.new(1,0,0,compact and 44 or 58)
+  body.Position=UDim2.fromOffset(0,compact and 44 or 58)
+  body.Size=UDim2.new(1,0,1,compact and -44 or -58)
+  logo.Visible=not compact
+  if subtitleLabel then subtitleLabel.Visible=not compact end
   local side=compact and 0 or 190
   local margin=compact and 12 or 20
   local short=h<490
@@ -2371,14 +2376,14 @@ return function(ctx)
   local padding=ctx.Search:FindFirstChildOfClass("UIPadding");if padding then padding.PaddingRight=UDim.new(0,compact and 36 or 66) end
   clear.Size=UDim2.fromOffset(compact and 40 or 28,compact and 40 or 28)
   clear.Position=UDim2.new(1,-margin-(compact and 40 or 32),0,compact and 12 or 18);shortcut.Position=UDim2.new(1,-margin-58,0,20)
-  hero.Visible=not(compact and short)
+  hero.Visible=not compact
   hero.Position=UDim2.fromOffset(x,68);hero.Size=UDim2.new(1,-side-margin*2,0,compact and 72 or 90)
   ctx.Title.TextSize=short and 17 or compact and 21 or 24
   ctx.Title.Position=UDim2.fromOffset(18,short and 7 or 13)
   ctx.Count.Visible=not short
   metric.Visible=not compact and not short
   ready.Visible=w>=650;ctx.Badge.Visible=false
-  local filterY=compact and (short and 62 or 150) or 170
+  local filterY=compact and 60 or 170
   filters.Position=UDim2.fromOffset(x,filterY);filters.Size=UDim2.new(1,-side-margin*2,0,compact and 40 or 30)
   local chipWidth=compact and math.min(100,(w-side-margin*2-12)/3) or 80
   for i,key in ipairs({"all","enabled","favorites"})do local control=chips[key];control.Position=UDim2.fromOffset((i-1)*(chipWidth+(compact and 6 or 8)),0);control.Size=UDim2.fromOffset(chipWidth,compact and 40 or 30)end
@@ -2388,11 +2393,40 @@ return function(ctx)
   local content=w-side-margin*2
   local columns=not app.LibraryListView and content>=650 and 2 or 1
   self.Columns=columns;app.LibraryColumns=columns
-  grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,compact and short and 110 or 124)
-  for _,row in ipairs(app.LibraryRows)do local d=self.Decorations[row.Key];if d then d.Footer.Position=UDim2.fromOffset(40,compact and short and 90 or 103);d.State.Position=UDim2.new(1,-76,0,compact and short and 90 or 103)end end
+  grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,compact and 78 or 124)
+  for _,row in ipairs(app.LibraryRows)do local d=self.Decorations[row.Key];if d then d.Footer.Position=UDim2.fromOffset(40,compact and 61 or 103);d.State.Position=UDim2.new(1,-76,0,compact and 61 or 103)end end
   local padding=library:FindFirstChildOfClass("UIPadding")
   if padding then padding.PaddingTop=UDim.new(0,compact and 4 or 18);padding.PaddingBottom=UDim.new(0,compact and 10 or 20);padding.PaddingLeft=UDim.new(0,compact and 10 or 20);padding.PaddingRight=UDim.new(0,compact and 10 or 20)end
   for _,row in ipairs(app.LibraryRows)do row.Favorite.Size=UDim2.fromOffset(compact and 40 or 24,compact and 44 or 24);row.Favorite.Position=UDim2.fromOffset(compact and 0 or 7,compact and 0 or 11)end
+  if compact then
+   ctx.Search.PlaceholderText="Search features..."
+   ctx.Minimize.Position=UDim2.new(1,-88,0,2);ctx.Close.Position=UDim2.new(1,-44,0,2)
+   for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text=="ALLEN / FORSAKEN" then text.Position=UDim2.fromOffset(14,11);text.Size=UDim2.new(1,-108,0,22)end end
+  else
+   ctx.Search.PlaceholderText="Search features, characters, or settings"
+   for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text=="ALLEN / FORSAKEN" then text.Position=UDim2.fromOffset(62,11)end end
+  end
+  if compact and w>=450 then
+   local searchWidth=math.floor(w*.48)
+   ctx.Search.Position=UDim2.fromOffset(58,8);ctx.Search.Size=UDim2.fromOffset(searchWidth-64,40)
+   ctx.NavToggle.Position=UDim2.fromOffset(8,8)
+   filters.Position=UDim2.fromOffset(searchWidth+4,8);filters.Size=UDim2.fromOffset(w-searchWidth-12,40)
+   local cw=(w-searchWidth-24)/3
+   for i,key in ipairs({"all","enabled","favorites"})do chips[key].Position=UDim2.fromOffset((i-1)*(cw+4),0);chips[key].Size=UDim2.fromOffset(cw,40)end
+   for _,page in pairs(ctx.Pages)do page.Position=UDim2.fromOffset(0,56);page.Size=UDim2.new(1,0,1,-64)end
+   clear.Visible=false
+  end
+  for _,row in ipairs(app.LibraryRows)do
+   for _,text in ipairs(row.Card:GetChildren())do
+    if text:IsA("TextLabel") and text.TextWrapped then
+     if not text:GetAttribute("DesktopY") then text:SetAttribute("DesktopY",text.Position.Y.Offset) end
+     text.Position=UDim2.new(text.Position.X.Scale,text.Position.X.Offset,0,compact and 34 or text:GetAttribute("DesktopY"))
+     text.Size=UDim2.new(text.Size.X.Scale,text.Size.X.Offset,0,compact and 22 or 48)
+     text.TextTruncate=Enum.TextTruncate.AtEnd
+    end
+   end
+   local d=self.Decorations[row.Key];if d then d.Footer.Visible=not compact;d.State.Visible=not compact end
+  end
   shadowLayout();self:Refresh()
  end
  connect(game:GetService("UserInputService").InputBegan,function(input,processed)
@@ -2419,7 +2453,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=11,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=12,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
