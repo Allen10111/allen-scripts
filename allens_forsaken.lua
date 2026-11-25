@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v4
+-- Allens Forsaken Script | standalone bundle v5
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -52,7 +52,7 @@ return function(ctx)
     local function enabled()
         if m.Destroyed or clock()<suppressUntil or (ctx.Alive and not ctx.Alive()) then return false end
         if ctx.CanAutomate and not ctx.CanAutomate() then return false end
-        return ctx.State.AutoFarmGenerators == true or ctx.State.AutoPlay == true
+        return ctx.State.AutoFarmGenerators == true or ctx.State.AutoPlay == true or ctx.State.AutoRotateGear == true
     end
     local function survivor()
         if ctx.IsSurvivor then return ctx.IsSurvivor() end
@@ -375,6 +375,7 @@ return function(ctx)
     local function solveActive()
         if not enabled() or not survivor() then return false end
         for kind in pairs(definitions) do
+            if kind~="Gear" and not ctx.State.AutoFarmGenerators and not ctx.State.AutoPlay then continue end
             for _, session in pairs(sessions(kind)) do
                 if active(kind,session) then
                     m.Puzzle=kind
@@ -440,9 +441,9 @@ return function(ctx)
                         local ok,count=pcall(gears.Get,gears)
                         if not ok or count<1 then m.Status="Find a gear before repairing";return true end
                         if type(callbacks.OnTurn)=="function" and takeAction(r) then
-                            callbacks.OnTurn(45)
+                            callbacks.OnTurn(90)
                         end
-                        m.Status="Turning one gear step per interval"
+                        m.Status="Rotating gear clockwise; waiting for native completion"
                         return true
                     end
                     return true
@@ -1181,9 +1182,9 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=4,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
-    State={AutoFarmGenerators=false,AutoPlay=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
-        GeneratorESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
+local c = {Version=5,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+    State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
+        GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
     NavOwner=nil,WaypointIndex=1,LastPath=0,LastFarm=0,LastScan=0,LastFailure={},LastStuck=0,Ready=false,Focused=true}
 env.AllensForsaken = c
@@ -1192,6 +1193,8 @@ local pages, tabs = {}, {}
 local dragging, draggingSlider, captureKey, minimized
 local move, combat, generators
 local generatorMarkers={}
+local gearMarkers={}
+c.GearMarkers=gearMarkers
 local CONFIG = "AllensForsaken/preferences.json"
 local function connect(signal,callback)
     local connection=signal:Connect(callback)
@@ -1561,6 +1564,53 @@ function c:RefreshGeneratorESP()
         if not keep[model] then marker.Gui:Destroy(); marker.Highlight:Destroy(); generatorMarkers[model]=nil end
     end
 end
+function c:ClearGearESP()
+    for model,marker in pairs(gearMarkers) do
+        marker.Gui:Destroy();marker.Highlight:Destroy();gearMarkers[model]=nil
+    end
+end
+function c:RefreshGearESP()
+    if self.Destroyed or not self.State.GearESP then self:ClearGearESP();return end
+    local ch=player.Character
+    local root=ch and ch:FindFirstChild("HumanoidRootPart")
+    local keep={}
+    -- Native gear spawners create pickup Models named Gear. Query only those,
+    -- rather than scanning every descendant or touching native highlights.
+    for _,model in ipairs(workspace:QueryDescendants("#Gear")) do
+        if model:IsA("Model") then
+            local part=model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart",true)
+            if part then
+                keep[model]=true
+                local marker=gearMarkers[model]
+                if not marker then
+                    local billboard=Instance.new("BillboardGui")
+                    billboard.Name="AllensGearLabel";billboard.Adornee=part
+                    billboard.Size=UDim2.fromOffset(150,40)
+                    billboard.StudsOffsetWorldSpace=Vector3.new(0,2.5,0)
+                    billboard.AlwaysOnTop=true;billboard.MaxDistance=2500
+                    local text=Instance.new("TextLabel")
+                    text.Size=UDim2.fromScale(1,1);text.BackgroundColor3=C.BG
+                    text.BackgroundTransparency=.2;text.BorderSizePixel=0
+                    text.Font=Enum.Font.GothamBold;text.TextSize=12;text.TextColor3=C.Accent
+                    text.Parent=billboard
+                    local corner=Instance.new("UICorner");corner.CornerRadius=UDim.new(0,6);corner.Parent=text
+                    local highlight=Instance.new("Highlight")
+                    highlight.Name="AllensGearESP";highlight.Adornee=model
+                    highlight.FillColor=C.Accent;highlight.OutlineColor=C.Accent
+                    highlight.FillTransparency=.65;highlight.OutlineTransparency=.1
+                    highlight.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop;highlight.Parent=model
+                    billboard.Parent=gui
+                    marker={Gui=billboard,Highlight=highlight,Text=text};gearMarkers[model]=marker
+                end
+                local distance=root and math.floor((part.Position-root.Position).Magnitude)
+                marker.Text.Text=distance and ("GEAR  |  "..distance.." studs") or "GEAR"
+            end
+        end
+    end
+    for model,marker in pairs(gearMarkers) do
+        if not keep[model] then marker.Gui:Destroy();marker.Highlight:Destroy();gearMarkers[model]=nil end
+    end
+end
 function c:Set(key,value)
     if self.Destroyed or self.State[key]==nil then return false end
     if key=="Hotkey" then
@@ -1580,6 +1630,8 @@ function c:Set(key,value)
     if key=="AutoFarmGenerators" and not value and not self.State.AutoPlay then safeCall(generators,"Leave") end
     if key=="InfiniteStamina" or key=="AntiDebuff" then safeCall(move,"Tick",0) end
     if key=="GeneratorESP" then self:RefreshGeneratorESP() end
+    if key=="GearESP" then self:RefreshGearESP() end
+    if key=="AutoRotateGear" and not value and not self.State.AutoFarmGenerators and not self.State.AutoPlay then safeCall(generators,"Leave") end
     return true
 end
 function c:Destroy()
@@ -1588,7 +1640,7 @@ function c:Destroy()
     self:StopNavigation()
     self.Destroyed=true
     safeCall(generators,"Destroy"); safeCall(combat,"Destroy"); safeCall(move,"Destroy")
-    self:ClearGeneratorESP()
+    self:ClearGeneratorESP();self:ClearGearESP()
     for _,connection in ipairs(self.Connections) do connection:Disconnect() end
     table.clear(self.Connections)
     for thread in pairs(self.Tasks) do if thread~=coroutine.running() then pcall(task.cancel,thread) end end
@@ -1715,6 +1767,8 @@ toggle(pages.Automation,"AutoBlock","Guest1337 auto-block","React to supported a
 toggle(pages.Automation,"InfiniteStamina","Infinite stamina (local)","Remove local drain; preserve ability freeze locks.",4)
 toggle(pages.Automation,"AntiDebuff","Local debuff relief","Reduce supported client effects; server effects may persist.",5)
 toggle(pages.Automation,"GeneratorESP","Generator ESP","Show progress, completion, distance, and occupancy.",6)
+toggle(pages.Automation,"AutoRotateGear","Auto rotate gear","Turn clockwise in an open gear puzzle; requires a gear.",7)
+toggle(pages.Automation,"GearESP","Gear ESP","Highlight dropped gears through walls and show distance.",8)
 heading(pages.Live,"Live status","Role, movement, puzzle, and adapter diagnostics.")
 local live=card(pages.Live,"Status",96,1)
 statusLabel=label(live,"Starting",UDim2.fromOffset(14,14),UDim2.new(1,-28,0,24),13)
@@ -1740,7 +1794,7 @@ connect(save.Activated,function()
     local ok,err=pcall(function()
         if type(isfolder)~="function" or not isfolder("AllensForsaken") then makefolder("AllensForsaken") end
         writefile(CONFIG,Http:JSONEncode({ThreatRadius=c.State.ThreatRadius,FarmDelay=c.State.FarmDelay,
-            PuzzlePacingVersion=4,PuzzleStepDelay=c.State.PuzzleStepDelay,GeneratorESP=c.State.GeneratorESP,BlockRange=c.State.BlockRange,Hotkey=c.State.Hotkey.Name}))
+            PuzzlePacingVersion=4,PuzzleStepDelay=c.State.PuzzleStepDelay,GeneratorESP=c.State.GeneratorESP,GearESP=c.State.GearESP,BlockRange=c.State.BlockRange,Hotkey=c.State.Hotkey.Name}))
     end)
     c:Notify(ok and "Preferences saved. Automation still starts paused." or tostring(err))
 end)
@@ -1822,6 +1876,7 @@ if type(isfile)=="function" and type(readfile)=="function" then
             if preferences.PuzzlePacingVersion~=4 then preferences.PuzzleStepDelay=math.min(tonumber(preferences.PuzzleStepDelay) or 0.2,0.2) end
             for _,key in ipairs({"ThreatRadius","FarmDelay","PuzzleStepDelay","BlockRange"}) do if preferences[key]~=nil then c:Set(key,preferences[key]) end end
             if type(preferences.GeneratorESP)=="boolean" then c:Set("GeneratorESP",preferences.GeneratorESP) end
+            if type(preferences.GearESP)=="boolean" then c:Set("GearESP",preferences.GearESP) end
             if type(preferences.Hotkey)=="string" then local ok,key=pcall(function() return Enum.KeyCode[preferences.Hotkey] end); if ok then c:Set("Hotkey",key) end end
         end
     end)
@@ -1843,9 +1898,9 @@ connect(RunService.Heartbeat,function(dt)
     end
     if displayElapsed>=0.4 then
         displayElapsed=0
-        c:RefreshGeneratorESP()
+        c:RefreshGeneratorESP();c:RefreshGearESP()
         local active=false
-        for _,key in ipairs({"AutoPlay","AutoFarmGenerators","AutoBlock","InfiniteStamina","AntiDebuff"}) do active=active or c.State[key] end
+        for _,key in ipairs({"AutoPlay","AutoFarmGenerators","AutoRotateGear","AutoBlock","InfiniteStamina","AntiDebuff"}) do active=active or c.State[key] end
         local badgeText=active and "ACTIVE" or "PAUSED"
         if badge.Text~=badgeText then badge.Text=badgeText; tween(badge,{TextColor3=active and C.Green or C.Muted}) end
         statusLabel.Text=c.NavStatus
