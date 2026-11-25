@@ -1,0 +1,26 @@
+{
+  "version": 6,
+  "independentImplementation": true,
+  "loadsCursedsaken": false,
+  "libraryControls": 284,
+  "catalogControls": 269,
+  "verified": [
+    "Standalone script and hub compile in Potassium",
+    "Library, global search, character aliases and favorites filter",
+    "Action buttons remain available through library categories",
+    "Previous generator, gear, ESP, block, stamina and settings controls retained",
+    "Compact phone layout and desktop restoration",
+    "Native ability guard, callback rejection and request throttling",
+    "Local config, lighting and attribute restoration",
+    "Native mouse-position aim hook and restoration",
+    "Azure QTE zone timing, completed-zone exclusion and constructor restoration",
+    "Suite cleanup and stopping requests after destruction"
+  ],
+  "limitations": [
+    "This is not yet a complete feature-for-feature recreation of Cursedsaken",
+    "Not every character-specific behavior has been exercised in a live round",
+    "Local configuration does not override server-owned damage, cooldowns or status decisions",
+    "Ghost-ability variants and persistent authoritative attack trails are not implemented",
+    "Cursedsaken-specific social/script-user detection and server item granting/deletion are not implemented"
+  ]
+}

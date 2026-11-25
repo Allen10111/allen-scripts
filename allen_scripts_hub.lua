@@ -21182,7 +21182,7 @@ local LP=Players.LocalPlayer
 local env=getgenv()
 if env.__ALLEN_GENERAL_HUB then env.__ALLEN_GENERAL_HUB:Destroy() end
 if env.__ALLEN_SCRIPTS_HUB then env.__ALLEN_SCRIPTS_HUB:Destroy() end
-local hub={Version="2026-11-24-r55",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
+local hub={Version="2026-11-25-r56",Destroyed=false,Connections={},Controllers={},Busy={},Rows={}}
 local INK,FF,ROSU,DUELS,MMM,SHINDO,BFNF,FNP,BLADE,UBG,HAJIME=7008097940,2404080894,3405992067,10766630653,2802559498,1511883870,2443177453,10258128048,4777817887,4730278139,10769763567
 if game.GameId==HAJIME then
     -- Clear a console left by the former automatic route; launching is explicit now.
@@ -21191,7 +21191,7 @@ if game.GameId==HAJIME then
 end
 local FORSAKEN=6331902150
 local gameName=game.GameId==FORSAKEN and "Forsaken" or game.GameId==HAJIME and "Hajime Rising" or game.GameId==INK and "Ink Game" or game.GameId==FF and "Funky Friday" or game.GameId==ROSU and "rosu!mania" or game.GameId==DUELS and "Funky Duels" or game.GameId==MMM and "Monday Morning Misery" or game.GameId==SHINDO and "Shindo Life" or game.GameId==BFNF and "Basically FNF: Remix" or game.GameId==FNP and "Friday Night Partying" or game.GameId==BLADE and "Blade Ball" or game.GameId==UBG and "Untitled Boxing Game" or game.GameId==8366716517 and "Sky Fighters" or "Other experience"
-local note="Build r55 · all features OFF."
+local note="Build r56 · all features OFF."
 local ffFolder,ffActor
 local factories={}
 local function execute(name,mode)
@@ -21220,7 +21220,7 @@ local function prepareFF()
     run_on_actor(ffActor,SOURCES.FFBridge)
 end
 local features={
-    {Id="forsakenconsole",Section="Forsaken",Category="Forsaken",Name="Allens Forsaken",Subtitle="Generator farmer, puzzles and character tools · starts paused",Game=FORSAKEN,Action=true},
+    {Id="forsakenconsole",Section="Forsaken",Category="Forsaken",Name="Forsaken Feature Library",Subtitle="Search, favorites · generators, gears, ESP, aim and character controls",Game=FORSAKEN,Action=true},
     {Id="hajimeconsole",Section="Hajime Rising",Category="Hajime Rising",Name="Hajime Rising",Subtitle="Dark console · training, punching bags and configuration profiles",Game=HAJIME,Action=true},
     {Id="silentaim",Section="Jailbreak",Category="Aim",Name="Silent Aim",Subtitle="Jailbreak projectile adapter",Game=245662005,Source="SilentAim"},
     {Id="sky_safeplatforms",Section="Sky Fighters",Category="Movement",Name="Safe Platforms",Subtitle="Whole-arena solid stud floor · partly transparent",Game=8366716517,Key="__ALLEN_SKY_safeplatforms",Source="SkyPlatforms"},
@@ -21308,7 +21308,7 @@ local function snapshot(feature)
     if feature.Id=="forsakenconsole" then
         local app=hub.ForsakenApp or env.AllensForsaken
         local running=type(app)=="table" and not app.Destroyed and app.Ready==true
-        return {Enabled=running,Status=running and "Console running · click to re-execute" or "Click Launch to open Forsaken"}
+        return {Enabled=running,Status=running and "Library running · click to re-execute" or "Click Launch to open the Forsaken library"}
     end
     if feature.Id=="hajimeconsole" then
         local app=hub.HajimeApp
@@ -21444,7 +21444,7 @@ create("UIStroke",{Color=C.Line,Thickness=1},window)
 local header=create("Frame",{Name="DragHandle",BackgroundTransparency=1,Active=true},window)
 local logo=label(window,"◇",30)
 local title=label(window,"ALLEN SCRIPTS",15);title.Font=Enum.Font.GothamBold
-local subtitle=label(window,"SCRIPT LIBRARY · BUILD R55",10);subtitle.TextColor3=C.Muted
+local subtitle=label(window,"SCRIPT LIBRARY · BUILD R56",10);subtitle.TextColor3=C.Muted
 local minimize=button(window,"—");minimize.Name="Minimize"
 local maximize=button(window,"□");maximize.Name="Maximize"
 local close=button(window,"×");close.Name="Close"
