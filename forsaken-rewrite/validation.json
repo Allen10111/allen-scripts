@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "independentImplementation": true,
   "loadsCursedsaken": false,
   "libraryControls": 284,
@@ -21,7 +21,7 @@
     "Simulated 390x844, 320x568, 844x390, 1024x768 and 1920x1080 layouts: bounded windows, touch-friendly controls and PC grid restoration",
     "Single-pointer window drag ownership; unrelated touches neither move nor cancel the drag",
     "On-screen drag clamping, minimize/restore, and normalized placement through simulated rotation",
-    "Smaller phone portrait and landscape dimensions with PC grid restoration"
+    "Reference proportions: landscape 54% width and 86% height; portrait 86% width/height with bounds; PC restoration"
   ],
   "limitations": [
     "This is not yet a complete feature-for-feature recreation of Cursedsaken",

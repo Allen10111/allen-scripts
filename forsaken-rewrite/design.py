@@ -6,8 +6,8 @@ def add_design(s):
   assert s.count(a)==1,('design anchor',a[:100])
   s=s.replace(a,b,1)
  s=s.replace('"Generators+"','"Generators"').replace('"Combat+"','"Combat"')
- once('standalone bundle v6 / independent feature suite','standalone bundle v9 / independent feature library')
- once('local c = {Version=6,','local c = {Version=9,')
+ once('standalone bundle v6 / independent feature suite','standalone bundle v10 / independent feature library')
+ once('local c = {Version=6,','local c = {Version=10,')
  once('c.Gui=gui','c.Gui=gui\ngui.Enabled=false\npcall(function()gui.ScreenInsets=Enum.ScreenInsets.CoreUISafeInsets end)\nif type(gethui)=="function" then pcall(function()local mount=gethui();if mount then gui.Parent=mount end end) end')
  once('    c.Tab=name\n    if c.Search then','    c.Tab=name\n    if pages.Library then pages.Library.CanvasPosition=Vector2.zero end\n    if c.Search then')
  once('c.Ready=true','c.Ready=true\nfit();gui.Enabled=true')
@@ -28,13 +28,14 @@ for i,row in ipairs(c.LibraryRows) do''')
         v=Vector2.new(v.X,math.min(v.Y,UIS.OnScreenKeyboardPosition.Y-12))
     end''')
  once('    c.WindowWidth=w;c.WindowHeight=h','''    if v.X<700 then
-        w=math.min(330,math.floor(v.X*.86),v.X-24);h=math.min(460,math.floor(v.Y*.60),v.Y-80)
+        w=math.min(390,math.floor(v.X*.86),v.X-24);h=math.min(720,math.floor(v.Y*.86),v.Y-32)
     elseif v.Y<550 then
-        w=math.min(520,math.floor(v.X*.66));h=math.min(330,math.floor(v.Y*.80),v.Y-60)
+        w=math.min(1040,math.floor(v.X*.54));h=math.min(780,math.floor(v.Y*.86),v.Y-32)
     elseif UIS.TouchEnabled and not UIS.KeyboardEnabled then
-        w=math.min(740,math.floor(v.X*.78));h=math.min(560,math.floor(v.Y*.70))
+        w=math.min(1040,math.floor(v.X*(v.X>v.Y and .54 or .86)));h=math.min(780,math.floor(v.Y*.86),v.Y-32)
     end
     if keyboardOpen then h=math.min(h+180,v.Y-16) end
+    c.Compact=w<700 or v.Y<550
     c.WindowWidth=w;c.WindowHeight=h''')
  once('function c:SetMinimized(value)','''pcall(function()
     connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardVisible"),fit)

@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v9 / independent feature library
+-- Allens Forsaken Script | standalone bundle v10 / independent feature library
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -2419,7 +2419,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=9,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=10,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
@@ -3223,13 +3223,14 @@ local function fit()
     local w=math.min(1040,math.max(280,v.X-24))
     local h=math.min(780,math.max(230,v.Y-80))
     if v.X<700 then
-        w=math.min(330,math.floor(v.X*.86),v.X-24);h=math.min(460,math.floor(v.Y*.60),v.Y-80)
+        w=math.min(390,math.floor(v.X*.86),v.X-24);h=math.min(720,math.floor(v.Y*.86),v.Y-32)
     elseif v.Y<550 then
-        w=math.min(520,math.floor(v.X*.66));h=math.min(330,math.floor(v.Y*.80),v.Y-60)
+        w=math.min(1040,math.floor(v.X*.54));h=math.min(780,math.floor(v.Y*.86),v.Y-32)
     elseif UIS.TouchEnabled and not UIS.KeyboardEnabled then
-        w=math.min(740,math.floor(v.X*.78));h=math.min(560,math.floor(v.Y*.70))
+        w=math.min(1040,math.floor(v.X*(v.X>v.Y and .54 or .86)));h=math.min(780,math.floor(v.Y*.86),v.Y-32)
     end
     if keyboardOpen then h=math.min(h+180,v.Y-16) end
+    c.Compact=w<700 or v.Y<550
     c.WindowWidth=w;c.WindowHeight=h
     c.Compact=v.X<700 or v.Y<550
     scale.Scale=1
