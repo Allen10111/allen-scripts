@@ -6,8 +6,8 @@ def add_design(s):
   assert s.count(a)==1,('design anchor',a[:100])
   s=s.replace(a,b,1)
  s=s.replace('"Generators+"','"Generators"').replace('"Combat+"','"Combat"')
- once('standalone bundle v6 / independent feature suite','standalone bundle v12 / independent feature library')
- once('local c = {Version=6,','local c = {Version=12,')
+ once('standalone bundle v6 / independent feature suite','standalone bundle v13 / independent feature library')
+ once('local c = {Version=6,','local c = {Version=13,')
  once('c.Gui=gui','c.Gui=gui\ngui.Enabled=false\npcall(function()gui.ScreenInsets=Enum.ScreenInsets.CoreUISafeInsets end)\nif type(gethui)=="function" then pcall(function()local mount=gethui();if mount then gui.Parent=mount end end) end')
  once('    c.Tab=name\n    if c.Search then','    c.Tab=name\n    if pages.Library then pages.Library.CanvasPosition=Vector2.zero end\n    if c.Search then')
  once('c.Ready=true','c.Ready=true\nfit();gui.Enabled=true')
@@ -41,6 +41,7 @@ for i,row in ipairs(c.LibraryRows) do''')
     if keyboardOpen then h=math.min(h+180,v.Y-16) end
     c.Compact=w<700 or v.Y<550
     c.WindowWidth=w;c.WindowHeight=h''')
+ once('    panel.Position=UDim2.fromOffset(math.clamp(x,8,math.max(8,v.X-w-8)),math.clamp(y,8,math.max(8,v.Y-(minimized and 58 or h)-8)))','    panel.Position=UDim2.fromOffset(x,y)')
  once('function c:SetMinimized(value)','''pcall(function()
     connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardVisible"),fit)
     connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardPosition"),fit)
@@ -60,8 +61,8 @@ function c:MoveWindowTo(position)
     if v.X<100 or v.Y<100 then v=camera and camera.ViewportSize or Vector2.new(390,844) end
     local width,height=panel.Size.X.Offset,panel.Size.Y.Offset
     local dx,dy=math.max(0,v.X-width-16),math.max(0,v.Y-height-16)
-    local x=math.clamp(position.X,8,8+dx)
-    local y=math.clamp(position.Y,8,8+dy)
+    local x=position.X
+    local y=position.Y
     panel.Position=UDim2.fromOffset(x,y)
     self.DragNormalized=Vector2.new(dx>0 and (x-8)/dx or 0,dy>0 and (y-8)/dy or 0)
 end

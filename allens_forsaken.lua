@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v12 / independent feature library
+-- Allens Forsaken Script | standalone bundle v13 / independent feature library
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -2453,7 +2453,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=12,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=13,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
@@ -3292,7 +3292,7 @@ local function fit()
     local x,y=panel.Position.X.Offset,panel.Position.Y.Offset
     if c.DragNormalized and c.WindowFitted and not dragging then x=8+c.DragNormalized.X*math.max(0,v.X-w-16);y=8+c.DragNormalized.Y*math.max(0,v.Y-(minimized and 58 or h)-16) end
     if not c.WindowFitted then x=(v.X-w)/2;y=(v.Y-h)/2;c.WindowFitted=true end
-    panel.Position=UDim2.fromOffset(math.clamp(x,8,math.max(8,v.X-w-8)),math.clamp(y,8,math.max(8,v.Y-(minimized and 58 or h)-8)))
+    panel.Position=UDim2.fromOffset(x,y)
 end
 pcall(function()
     connect(UIS:GetPropertyChangedSignal("OnScreenKeyboardVisible"),fit)
@@ -3318,8 +3318,8 @@ function c:MoveWindowTo(position)
     if v.X<100 or v.Y<100 then v=camera and camera.ViewportSize or Vector2.new(390,844) end
     local width,height=panel.Size.X.Offset,panel.Size.Y.Offset
     local dx,dy=math.max(0,v.X-width-16),math.max(0,v.Y-height-16)
-    local x=math.clamp(position.X,8,8+dx)
-    local y=math.clamp(position.Y,8,8+dy)
+    local x=position.X
+    local y=position.Y
     panel.Position=UDim2.fromOffset(x,y)
     self.DragNormalized=Vector2.new(dx>0 and (x-8)/dx or 0,dy>0 and (y-8)/dy or 0)
 end
