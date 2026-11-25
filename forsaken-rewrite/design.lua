@@ -117,7 +117,7 @@ return function(ctx)
   for _,text in ipairs(row.Card:GetChildren())do
    if text:IsA("TextLabel") and text~=footer and text~=stateLabel then
     row.TextLayout[#row.TextLayout+1]={Object=text,Position=text.Position,Size=text.Size,Wrapped=text.TextWrapped,Alignment=text.TextYAlignment,
-     Description=text.Position.Y.Offset>=30 and text.Position.X.Scale==0}
+     Description=text.Name=="FeatureDescription" or (text.Name~="FeatureTitle" and text.Position.Y.Offset>=30 and text.Position.X.Scale==0)}
    end
   end
   local stroke=row.Card:FindFirstChildOfClass("UIStroke")
@@ -190,7 +190,7 @@ return function(ctx)
   ctx.Close.Size=ctx.Minimize.Size
   ctx.Minimize.Position=UDim2.new(1,compact and -90 or -84,0,compact and 9 or 13)
   ctx.Close.Position=UDim2.new(1,compact and -46 or -44,0,compact and 9 or 13)
-  for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text=="ALLEN / FORSAKEN" then text.TextSize=compact and (w<340 and 12 or 14) or 17;text.Size=UDim2.new(1,compact and -160 or -230,0,22)end end
+  for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text:find("ALLEN / FORSAKEN",1,true) then text.TextSize=compact and (w<340 and 12 or 14) or 17;text.Size=UDim2.new(1,compact and -160 or -230,0,22)end end
   local padding=ctx.Search:FindFirstChildOfClass("UIPadding");if padding then padding.PaddingRight=UDim.new(0,compact and 36 or 66) end
   clear.Size=UDim2.fromOffset(compact and 40 or 28,compact and 40 or 28)
   clear.Position=UDim2.new(1,-margin-(compact and 40 or 32),0,compact and 12 or 18);shortcut.Position=UDim2.new(1,-margin-58,0,20)
@@ -219,10 +219,10 @@ return function(ctx)
   if compact then
    ctx.Search.PlaceholderText="Search features..."
    ctx.Minimize.Position=UDim2.new(1,-88,0,2);ctx.Close.Position=UDim2.new(1,-44,0,2)
-   for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text=="ALLEN / FORSAKEN" then text.Position=UDim2.fromOffset(14,11);text.Size=UDim2.new(1,-108,0,22)end end
+   for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text:find("ALLEN / FORSAKEN",1,true) then text.Text="ALLEN / FORSAKEN · v15";text.Position=UDim2.fromOffset(14,11);text.Size=UDim2.new(1,-108,0,22)end end
   else
    ctx.Search.PlaceholderText="Search features, characters, or settings"
-   for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text=="ALLEN / FORSAKEN" then text.Position=UDim2.fromOffset(62,11)end end
+   for _,text in ipairs(header:GetChildren())do if text:IsA("TextLabel") and text.Text:find("ALLEN / FORSAKEN",1,true) then text.Text="ALLEN / FORSAKEN · v15";text.Position=UDim2.fromOffset(62,11)end end
   end
   if compact and w>=450 then
    local searchWidth=math.floor(w*.48)
@@ -237,6 +237,7 @@ return function(ctx)
   for _,row in ipairs(app.LibraryRows)do
    for _,item in ipairs(row.TextLayout)do
     local text=item.Object
+    text.AnchorPoint=Vector2.zero;text.AutomaticSize=Enum.AutomaticSize.None
     text.Position=item.Position;text.Size=item.Size;text.TextWrapped=item.Wrapped;text.TextYAlignment=item.Alignment
     if compact then
      if item.Description then
