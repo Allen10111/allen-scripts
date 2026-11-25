@@ -116,6 +116,8 @@ once('            "\\nLast diagnostic: "..tostring(c.FeatureStatus.Error or "Non
 # The catalogue is part of the actual source, rather than a downloaded engine.
 from library import add_library
 s=add_library(s)
+from design import add_design
+s=add_design(s)
 output=root.parent/'allens_forsaken.lua'
 output.write_text(s,encoding='utf-8',newline='\n')
 print(json.dumps({'output':str(output),'characters':len(s),'thirdPartyLoader':False}))

@@ -1,4 +1,4 @@
--- Allens Forsaken Script | standalone bundle v6 / independent feature suite
+-- Allens Forsaken Script | standalone bundle v7 / independent feature library
 -- RightShift: show/hide. End: unload. Automation starts paused.
 -- Puzzle steps are serialized; default pause is 0.2 seconds per native action.
 local Factories = {}
@@ -1210,32 +1210,32 @@ text("Visual","KillerColor","Killer color (hex)","FF606F")
 text("Visual","SurvivorColor","Survivor color (hex)","64E3A0")
 text("Visual","ItemColor","Item color (hex)","7B8CFF")
 toggle("Visual","ThreatWarning","Attack warnings","Uses nearby killers' native attack animations.")
-toggle("Generators+","SeparatePuzzleTiming","Separate timing for each puzzle")
-number("Generators+","ConnectPairDelay","Connect step interval (seconds)",.15,.05,1,.05)
-number("Generators+","FlowCellDelay","Flow cell interval (seconds)",.1,.05,1,.05)
-number("Generators+","GearTurnDelay","Gear rotation interval (seconds)",.1,.05,1,.05)
-number("Generators+","LockPressDelay","Lock press interval (seconds)",.05,.05,1,.05)
-number("Generators+","GearTurnDegrees","Clockwise degrees per gear step",90,15,180,15)
-toggle("Combat+","AutoM1","Auto primary attack","Uses the equipped actor's native main ability and cooldown guard.")
-number("Combat+","AttackRange","Primary attack distance",8,2,20,.5)
-number("Combat+","AbilityRange","Character ability distance",14,2,100,1)
-number("Combat+","RequestSpacing","Minimum ability request interval",.2,.1,2,.1)
-toggle("Combat+","AutoTrapQTE","Auto Azure trap minigame","Presses Space when the native marker enters an unfinished target zone (PC input).")
-toggle("Combat+","AutoHookQTE","Auto Nosferatu hook minigame","Reads the active native QTE key; does not submit a fabricated result.")
-toggle("Combat+","InfiniteQTEAttempts","Preserve local Azure QTE attempts","Resets the client's failed-attempt counter; server rules remain authoritative.")
-number("Combat+","QTEInputInterval","Minimum QTE input interval",.1,.05,.5,.05)
-toggle("Combat+","AutoDodge","Move away from incoming attacks")
-number("Combat+","DodgeRadius","Attack warning / dodge radius",14,5,35)
-toggle("Combat+","AntiBackstab","Face nearby threats behind you")
-toggle("Combat+","BodyBlock","Move into a selected opponent's path")
-number("Combat+","BodyBlockPrediction","Body-block lead time",.25,0,1,.05)
-text("Combat+","AbilityName","Native ability name", "Block")
-action("Combat+","UseAbility","Request selected native ability")
-number("Combat+","BackstabRadius","Backstab checking distance",8,3,20)
-toggle("Combat+","AttackVisualizer","Visualize attack range","Visualization only; does not change server hitboxes.")
-number("Combat+","VisualWidth","Visualizer width",5,1,20,.5)
-number("Combat+","VisualHeight","Visualizer height",6,1,20,.5)
-number("Combat+","VisualLength","Visualizer length",8,1,30,.5)
+toggle("Generators","SeparatePuzzleTiming","Separate timing for each puzzle")
+number("Generators","ConnectPairDelay","Connect step interval (seconds)",.15,.05,1,.05)
+number("Generators","FlowCellDelay","Flow cell interval (seconds)",.1,.05,1,.05)
+number("Generators","GearTurnDelay","Gear rotation interval (seconds)",.1,.05,1,.05)
+number("Generators","LockPressDelay","Lock press interval (seconds)",.05,.05,1,.05)
+number("Generators","GearTurnDegrees","Clockwise degrees per gear step",90,15,180,15)
+toggle("Combat","AutoM1","Auto primary attack","Uses the equipped actor's native main ability and cooldown guard.")
+number("Combat","AttackRange","Primary attack distance",8,2,20,.5)
+number("Combat","AbilityRange","Character ability distance",14,2,100,1)
+number("Combat","RequestSpacing","Minimum ability request interval",.2,.1,2,.1)
+toggle("Combat","AutoTrapQTE","Auto Azure trap minigame","Presses Space when the native marker enters an unfinished target zone (PC input).")
+toggle("Combat","AutoHookQTE","Auto Nosferatu hook minigame","Reads the active native QTE key; does not submit a fabricated result.")
+toggle("Combat","InfiniteQTEAttempts","Preserve local Azure QTE attempts","Resets the client's failed-attempt counter; server rules remain authoritative.")
+number("Combat","QTEInputInterval","Minimum QTE input interval",.1,.05,.5,.05)
+toggle("Combat","AutoDodge","Move away from incoming attacks")
+number("Combat","DodgeRadius","Attack warning / dodge radius",14,5,35)
+toggle("Combat","AntiBackstab","Face nearby threats behind you")
+toggle("Combat","BodyBlock","Move into a selected opponent's path")
+number("Combat","BodyBlockPrediction","Body-block lead time",.25,0,1,.05)
+text("Combat","AbilityName","Native ability name", "Block")
+action("Combat","UseAbility","Request selected native ability")
+number("Combat","BackstabRadius","Backstab checking distance",8,3,20)
+toggle("Combat","AttackVisualizer","Visualize attack range","Visualization only; does not change server hitboxes.")
+number("Combat","VisualWidth","Visualizer width",5,1,20,.5)
+number("Combat","VisualHeight","Visualizer height",6,1,20,.5)
+number("Combat","VisualLength","Visualizer length",8,1,30,.5)
 toggle("Aim","AimBot","Aim assist")
 toggle("Aim","SilentAim","Native mouse-position aim","Overrides this game's mouse-position interface; restores on disable.")
 choice("Aim","AimMethod","Aim method","Camera",{"Camera","Root","Camera + Root"})
@@ -2186,6 +2186,202 @@ end
 
 end)()
 
+local UIFactory=(function()
+-- Allen's native UI layer: one control tree, responsive grid and library views.
+return function(ctx)
+ local app,C=ctx.App,ctx.Palette
+ local make,label,button,connect=ctx.Make,ctx.Label,ctx.Button,ctx.Connect
+ local function round(object,radius)ctx.Round(object,radius);return object end
+ local panel,body,header,rail=ctx.Panel,ctx.Body,ctx.Header,ctx.Rail
+ local library=ctx.Pages.Library
+ local ui={Destroyed=false,Decorations={},Navigation={},Columns=1}
+ local old={};for key,value in pairs(C) do old[key]=value end
+ local palette={BG=Color3.fromRGB(12,14,22),Panel=Color3.fromRGB(19,22,33),Hover=Color3.fromRGB(34,38,56),
+  Line=Color3.fromRGB(43,49,70),Text=Color3.fromRGB(240,243,252),Muted=Color3.fromRGB(155,166,189),
+  Accent=Color3.fromRGB(145,125,255),Green=Color3.fromRGB(83,222,174),Warning=Color3.fromRGB(255,197,113)}
+ for key,value in pairs(palette) do C[key]=value end
+ for _,object in ipairs(ctx.Gui:QueryDescendants("GuiObject, UIStroke")) do
+  for key,value in pairs(old) do
+   if palette[key] then
+    if object:IsA("GuiObject") and object.BackgroundColor3==value then object.BackgroundColor3=palette[key] end
+    if (object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox")) and object.TextColor3==value then object.TextColor3=palette[key] end
+    if object:IsA("UIStroke") and object.Color==value then object.Color=palette[key] end
+   end
+  end
+ end
+ round(panel,18)
+ local shadow=round(make("Frame",{Name="WindowShadow",BackgroundColor3=Color3.new(),BackgroundTransparency=.48,BorderSizePixel=0,ZIndex=0},ctx.Gui),22)
+ local function shadowLayout()
+  shadow.Position=panel.Position+UDim2.fromOffset(-6,8);shadow.Size=panel.Size+UDim2.fromOffset(12,8);shadow.Visible=panel.Visible
+ end
+ connect(panel:GetPropertyChangedSignal("Position"),shadowLayout)
+ connect(panel:GetPropertyChangedSignal("Size"),shadowLayout)
+ connect(panel:GetPropertyChangedSignal("Visible"),shadowLayout)
+ shadowLayout()
+ local logo=round(make("Frame",{Position=UDim2.fromOffset(16,13),Size=UDim2.fromOffset(34,34),BackgroundColor3=C.Accent,BorderSizePixel=0},header),10)
+ local logoText=label(logo,"AS",UDim2.new(),UDim2.fromScale(1,1),14,Color3.new(1,1,1));logoText.Font=Enum.Font.GothamBold;logoText.TextXAlignment=Enum.TextXAlignment.Center
+ local accentLine=make("Frame",{Size=UDim2.new(1,-32,0,2),Position=UDim2.fromOffset(16,0),BackgroundColor3=C.Accent,BorderSizePixel=0},header)
+ make("UIGradient",{Color=ColorSequence.new(C.Accent,Color3.fromRGB(85,211,205))},accentLine)
+ for _,text in ipairs(header:QueryDescendants("TextLabel")) do
+  if text.Text=="Allens Forsaken Script" then text.Position=UDim2.fromOffset(62,11);text.Text="ALLEN / FORSAKEN";text.Font=Enum.Font.GothamBold;text.TextSize=17;text.Size=UDim2.new(1,-230,0,22)
+  elseif text.Text:find("SURVIVOR AUTOMATION",1,true) then text.Position=UDim2.fromOffset(63,34);text.Text="FEATURE LIBRARY";text.TextSize=10;text.TextColor3=C.Muted end
+ end
+ local ready=round(make("Frame",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-128,0,17),Size=UDim2.fromOffset(88,25),BackgroundColor3=Color3.fromRGB(23,49,43),BorderSizePixel=0},header),12)
+ local readyText=label(ready,"● READY",UDim2.new(),UDim2.fromScale(1,1),10,C.Green);readyText.TextXAlignment=Enum.TextXAlignment.Center;readyText.Font=Enum.Font.GothamBold
+ ctx.Badge.Visible=false
+ rail.BackgroundTransparency=0;rail.BackgroundColor3=C.BG
+ for _,child in ipairs(rail:GetChildren()) do if child:IsA("TextLabel") then child.Text="BROWSE LIBRARY";child.TextSize=10;child.Position=UDim2.fromOffset(15,17) end end
+ local order={"Library","Favorites","Stamina","Generators","Combat","Survivors","Killers","Aim","Visual","Antis","Items","Teleport","Animations","Music","Fun","Misc","UI","Live","Settings"}
+ local categoryRank={};for index,name in ipairs(order)do categoryRank[name]=index end
+ local priority={InfiniteStamina=1,ManageSprint=2,NoStaminaPenalty=3,ToggleSprint=4,RecommendedStamina=5,ResetStamina=6,
+  AutoFarmGenerators=1,AutoPlay=2,AutoRotateGear=3,GeneratorESP=4,PuzzleStepDelay=5,ThreatRadius=6,FarmDelay=7,
+  AutoBlock=1,AutoM1=2,AutoDodge=3,BlockRange=4,AttackRange=5,AbilityRange=6,
+  AutoPickup=1,GearESP=2,PickupReach=3,AntiDebuff=1}
+ local popular={AutoFarmGenerators=1,InfiniteStamina=2,AutoBlock=3,AutoRotateGear=4,GearESP=5,AutoPlay=6,GeneratorESP=7}
+ for index,row in ipairs(app.LibraryRows)do row.DesignOrder=(categoryRank[row.Category] or 99)*1000+(priority[row.Key] or 100+index) end
+ local icons={Library="ALL",Favorites="★",Stamina="ST",Generators="GE",Combat="CO",Survivors="SU",Killers="KI",Aim="AI",Visual="VI",Antis="AN",Items="IT",Teleport="TP",Animations="AN",Music="MU",Fun="FX",Misc="MI",UI="UI",Live="LV",Settings="SE"}
+ for index,name in ipairs(order) do
+  local control=ctx.Tabs[name]
+  if control then
+   control.Position=UDim2.fromOffset(10,44+(index-1)*44);control.Size=UDim2.fromOffset(170,38)
+   control.Text=name;control.TextSize=14;control.TextXAlignment=Enum.TextXAlignment.Left;round(control,9)
+   local padding=control:FindFirstChildOfClass("UIPadding") or make("UIPadding",{},control)
+   padding.PaddingLeft=UDim.new(0,14);padding.PaddingRight=UDim.new(0,40)
+   local icon=label(control,"",UDim2.fromOffset(9,0),UDim2.fromOffset(24,38),10,C.Muted);icon.Visible=false
+   local count=label(control,"",UDim2.new(1,-35,0,0),UDim2.fromOffset(28,38),10,C.Muted);count.TextXAlignment=Enum.TextXAlignment.Right
+   local line=round(make("Frame",{Position=UDim2.fromOffset(-12,9),Size=UDim2.fromOffset(3,20),BackgroundColor3=C.Accent,BorderSizePixel=0,Visible=false},control),2)
+   ui.Navigation[name]={Button=control,Count=count,Icon=icon,Line=line}
+  end
+ end
+ if ctx.Tabs.Automation then ctx.Tabs.Automation.Visible=false end
+ rail.CanvasSize=UDim2.fromOffset(0,56+#order*44)
+ ctx.Search.TextXAlignment=Enum.TextXAlignment.Left;ctx.Search.TextSize=14
+ ctx.Search.PlaceholderText="Search features, characters, or settings"
+ round(ctx.Search,11)
+ local searchStroke=make("UIStroke",{Color=C.Line,Thickness=1},ctx.Search)
+ connect(ctx.Search.Focused,function()searchStroke.Color=C.Accent end)
+ connect(ctx.Search.FocusLost,function()searchStroke.Color=C.Line end)
+ local shortcut=label(body,"Ctrl K",UDim2.new(),UDim2.fromOffset(50,24),10,C.Muted);shortcut.TextXAlignment=Enum.TextXAlignment.Center
+ local clear=button(body,"×",UDim2.new(),UDim2.fromOffset(28,28));clear.BackgroundTransparency=1;clear.TextSize=20
+ connect(clear.Activated,function()ctx.Search.Text="";ctx.Search:ReleaseFocus()end)
+ local hero=ctx.LibraryHeader;hero.Parent=body;hero.BackgroundTransparency=0;hero.BackgroundColor3=C.Panel;round(hero,13)
+ make("UIStroke",{Color=C.Line,Thickness=1},hero)
+ ctx.Title.Position=UDim2.fromOffset(18,13);ctx.Title.Size=UDim2.new(1,-36,0,30);ctx.Title.TextSize=24;ctx.Title.Font=Enum.Font.GothamBold
+ ctx.Count.Position=UDim2.fromOffset(19,53);ctx.Count.Size=UDim2.new(1,-36,0,20);ctx.Count.TextSize=12;ctx.Count.TextColor3=C.Muted
+ local metric=round(make("Frame",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-18,0,18),Size=UDim2.fromOffset(104,25),BackgroundColor3=C.Hover,BorderSizePixel=0},hero),12)
+ local metricText=label(metric,"",UDim2.new(),UDim2.fromScale(1,1),10,C.Accent);metricText.TextXAlignment=Enum.TextXAlignment.Center;metricText.Font=Enum.Font.GothamBold
+ local filters=make("Frame",{BackgroundTransparency=1},body)
+ local chips={}
+ app.LibraryFilter="all"
+ for index,item in ipairs({{"all","All"},{"enabled","Enabled"},{"favorites","Starred"}}) do
+  local key,text=item[1],item[2]
+  local control=button(filters,text,UDim2.fromOffset((index-1)*88,0),UDim2.fromOffset(80,30));control.TextSize=12;round(control,9)
+  connect(control.Activated,function()app.LibraryFilter=key;ctx.Refresh()end)
+  chips[key]=control
+ end
+ local view=button(filters,"Grid",UDim2.new(1,-72,0,0),UDim2.fromOffset(72,30));view.TextSize=12;round(view,9)
+ app.LibraryListView=false
+ connect(view.Activated,function()app.LibraryListView=not app.LibraryListView;view.Text=app.LibraryListView and "List" or "Grid";ui:Layout(app.WindowWidth,app.WindowHeight,app.Compact)end)
+ for _,layout in ipairs(library:GetChildren()) do if layout:IsA("UIListLayout") then layout:Destroy() end end
+ local grid=make("UIGridLayout",{CellPadding=UDim2.fromOffset(12,12),SortOrder=Enum.SortOrder.LayoutOrder,FillDirection=Enum.FillDirection.Horizontal},library)
+ library.ScrollBarThickness=4;library.ScrollBarImageColor3=C.Line
+ for _,row in ipairs(app.LibraryRows) do
+  local aliases={AutoFarmGenerators="auto generator autogen generator farm",AutoPlay="auto generator autoplay navigation pathfinding",InfiniteStamina="infinite stamina inf stamina energy",AutoRotateGear="auto gear rotate",GeneratorESP="generator gen esp",GearESP="gear esp"}
+  row.Search=row.Search.." "..(aliases[row.Key] or "")
+  if row.Key=="AutoFarmGenerators" or row.Key=="AutoPlay" then
+   for _,text in ipairs(row.Card:GetChildren())do
+    if text:IsA("TextLabel") and text.Position.Y.Offset<30 and text.Position.X.Scale==0 then text.Text=row.Key=="AutoFarmGenerators" and "Auto Generator" or "Generator Autoplay" end
+   end
+  end
+  round(row.Card,12);row.Card.BackgroundColor3=C.Panel
+  for _,text in ipairs(row.Card:QueryDescendants("TextLabel")) do
+   if text.TextSize<=11 then text.TextSize=12 end
+   if text.TextWrapped and text.Position.Y.Offset>=37 then text.Size=UDim2.new(text.Size.X.Scale,text.Size.X.Offset,0,48);text.TextTruncate=Enum.TextTruncate.AtEnd end
+  end
+  local footer=label(row.Card,row.Category:upper(),UDim2.fromOffset(40,103),UDim2.new(1,-120,0,15),9,C.Muted)
+  local stateLabel=label(row.Card,"",UDim2.new(1,-76,0,103),UDim2.fromOffset(60,15),9,C.Muted);stateLabel.TextXAlignment=Enum.TextXAlignment.Right;stateLabel.Font=Enum.Font.GothamBold
+  ui.Decorations[row.Key]={Footer=footer,State=stateLabel}
+  local stroke=row.Card:FindFirstChildOfClass("UIStroke")
+  if stroke then stroke.Color=C.Line end
+  connect(row.Card.MouseEnter,function()if stroke then stroke.Color=Color3.fromRGB(91,84,134)end end)
+  connect(row.Card.MouseLeave,function()if stroke then stroke.Color=C.Line end end)
+ end
+ function ui:Refresh()
+  if self.Destroyed then return end
+  local count,on,favorites=0,0,0
+  local counts={}
+  for _,row in ipairs(app.LibraryRows) do
+   row.Card.LayoutOrder=app.Tab=="Library" and not ctx.Search.Text:find("%S") and popular[row.Key] or row.DesignOrder
+   counts[row.Category]=(counts[row.Category] or 0)+1
+   if app.Favorites[row.Key] then favorites+=1 end
+   local value=app.State[row.Key]
+   if type(value)=="boolean" and value then on+=1 end
+   if row.Card.Visible then
+    if app.LibraryFilter=="enabled" and not (type(value)=="boolean" and value) then row.Card.Visible=false end
+    if app.LibraryFilter=="favorites" and not app.Favorites[row.Key] then row.Card.Visible=false end
+   end
+   if row.Card.Visible then count+=1 end
+   local decoration=self.Decorations[row.Key]
+   if decoration then
+    local text=type(value)=="boolean" and (value and "ON" or "OFF") or type(value)=="number" and "VALUE" or type(value)=="string" and "SETTING" or "ACTION"
+    if decoration.State.Text~=text then decoration.State.Text=text end
+    decoration.State.TextColor3=type(value)=="boolean" and value and C.Green or C.Muted
+   end
+  end
+  app.LibraryResultCount=count
+  local searching=ctx.Search.Text:find("%S")~=nil
+  ctx.Count.Text=count.." visible  ·  "..#app.LibraryRows.." in your library  ·  "..on.." switches on"
+  if count==0 then ctx.Count.Text=app.Tab=="Favorites" and "No favorites yet. Use the star on any control." or "No matches. Try a feature name or a character." end
+  if app.Tab=="Live" and not searching then ctx.Count.Text="Your character, automation and adapter diagnostics" end
+  metricText.Text=on.." ENABLED"
+  clear.Visible=searching;shortcut.Visible=not searching and not app.Compact
+  for key,control in pairs(chips) do control.BackgroundColor3=app.LibraryFilter==key and C.Hover or C.Panel;control.TextColor3=app.LibraryFilter==key and C.Accent or C.Muted end
+  for name,entry in pairs(self.Navigation) do
+   entry.Line.Visible=app.Tab==name
+   entry.Icon.TextColor3=app.Tab==name and C.Accent or C.Muted
+   local total=name=="Library" and #app.LibraryRows or name=="Favorites" and favorites or counts[name]
+   entry.Count.Text=total and tostring(total) or ""
+  end
+ end
+ function ui:Layout(w,h,compact)
+  if self.Destroyed then return end
+  local side=compact and 0 or 190
+  local margin=compact and 12 or 20
+  local short=h<490
+  rail.Size=UDim2.new(0,190,1,compact and -48 or 0)
+  rail.BackgroundTransparency=0;rail.BackgroundColor3=C.BG
+  local x=side+margin
+  ctx.Search.Position=UDim2.fromOffset(compact and 54 or x,12)
+  ctx.Search.Size=UDim2.new(1,-(compact and 68 or side+margin*2),0,40)
+  local padding=ctx.Search:FindFirstChildOfClass("UIPadding");if padding then padding.PaddingRight=UDim.new(0,compact and 36 or 66) end
+  clear.Position=UDim2.new(1,-margin-32,0,18);shortcut.Position=UDim2.new(1,-margin-58,0,20)
+  hero.Position=UDim2.fromOffset(x,short and 62 or 68);hero.Size=UDim2.new(1,-side-margin*2,0,short and 46 or 90)
+  ctx.Title.TextSize=short and 17 or compact and 21 or 24
+  ctx.Title.Position=UDim2.fromOffset(18,short and 7 or 13)
+  ctx.Count.Visible=not short
+  metric.Visible=not compact and not short
+  ready.Visible=w>=650;ctx.Badge.Visible=false
+  local filterY=short and 118 or 170
+  filters.Position=UDim2.fromOffset(x,filterY);filters.Size=UDim2.new(1,-side-margin*2,0,30)
+  view.Visible=not compact
+  local top=filterY+44
+  for _,page in pairs(ctx.Pages) do page.Position=UDim2.fromOffset(side,top);page.Size=UDim2.new(1,-side,1,-top-8) end
+  local content=w-side-margin*2
+  local columns=not app.LibraryListView and content>=650 and 2 or 1
+  self.Columns=columns;app.LibraryColumns=columns
+  grid.CellSize=UDim2.new(1/columns,columns==2 and -9 or -6,0,124)
+  shadowLayout();self:Refresh()
+ end
+ connect(game:GetService("UserInputService").InputBegan,function(input,processed)
+  if input.KeyCode==Enum.KeyCode.K and (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.LeftControl) or game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.RightControl)) then
+   panel.Visible=true;app:SetMinimized(false);ctx.Search:CaptureFocus()
+  elseif input.KeyCode==Enum.KeyCode.Escape and ctx.Search:IsFocused() then ctx.Search.Text="";ctx.Search:ReleaseFocus() end
+ end)
+ function ui:Destroy()self.Destroyed=true;shadow:Destroy()end
+ return ui
+end
+
+end)()
 local env = type(getgenv) == "function" and getgenv() or _G
 if env.AllensForsaken then env.AllensForsaken:Destroy() end
 local Players = game:GetService("Players")
@@ -2200,7 +2396,7 @@ assert(player and RS:FindFirstChild("Systems") and RS:FindFirstChild("Modules"),
 local C = {BG=Color3.fromRGB(10,12,16),Panel=Color3.fromRGB(18,22,31),Hover=Color3.fromRGB(24,30,42),
     Line=Color3.fromRGB(37,46,62),Text=Color3.fromRGB(235,240,250),Muted=Color3.fromRGB(144,156,178),
     Accent=Color3.fromRGB(123,140,255),Green=Color3.fromRGB(83,222,176),Warning=Color3.fromRGB(246,190,106)}
-local c = {Version=6,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
+local c = {Version=7,Destroyed=false,Connections={},Tasks={},Tweens={},Bindings={},FeatureStatus={},
     State={AutoFarmGenerators=false,AutoPlay=false,AutoRotateGear=false,AutoBlock=false,InfiniteStamina=false,AntiDebuff=false,
         GeneratorESP=true,GearESP=true,ThreatRadius=45,FarmDelay=0.8,PuzzleStepDelay=0.2,BlockRange=16,FaceThreat=true,Hotkey=Enum.KeyCode.RightShift},
     Generators={},NavStatus="Paused",ManualUntil=0,NavGeneration=0,PathBusy=false,Waypoints=nil,
@@ -2680,6 +2876,7 @@ function c:Destroy()
     table.clear(self.Tasks)
     for _,t in pairs(self.Tweens) do t:Cancel() end
     table.clear(self.Tweens)
+    if self.UI then self.UI:Destroy() end
     if gui then gui:Destroy() end
     if env.AllensForsaken==self then env.AllensForsaken=nil end
 end
@@ -2709,6 +2906,8 @@ end
 gui=make("ScreenGui",{Name="Allens Forsaken Script",ResetOnSpawn=false,DisplayOrder=95,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling},player:WaitForChild("PlayerGui"))
 c.Gui=gui
+gui.Enabled=false
+if type(gethui)=="function" then pcall(function()local mount=gethui();if mount then gui.Parent=mount end end) end
 connect(gui.Destroying,function() if not c.Destroyed then c:Destroy() end end)
 panel=make("Frame",{Name="Panel",Size=UDim2.fromOffset(620,530),Position=UDim2.new(0.5,-310,0.5,-265),
     BackgroundColor3=C.BG,BorderSizePixel=0,ClipsDescendants=true},gui)
@@ -2730,13 +2929,14 @@ label(rail,"WORKSPACE",UDim2.fromOffset(14,22),UDim2.fromOffset(110,16),9,C.Mute
 local refreshLibrary
 local function selectTab(name)
     c.Tab=name
+    if pages.Library then pages.Library.CanvasPosition=Vector2.zero end
     if c.Search then c.Search.Text="" end
     if refreshLibrary then refreshLibrary();return end
     for n,page in pairs(pages) do page.Visible=n==name end
     for n,b in pairs(tabs) do tween(b,{TextColor3=n==name and C.Accent or C.Muted,
         BackgroundColor3=n==name and C.Hover or C.Panel}) end
 end
-local allTabs={"Library","Favorites","Automation","Stamina","Visual","Generators+","Combat+","Survivors","Killers","Aim","Antis","Items","Misc","Teleport","Animations","Music","Fun","UI","Live","Settings"}
+local allTabs={"Library","Favorites","Automation","Stamina","Visual","Generators","Combat","Survivors","Killers","Aim","Antis","Items","Misc","Teleport","Animations","Music","Fun","UI","Live","Settings"}
 rail.CanvasSize=UDim2.fromOffset(0,60+#allTabs*44)
 for i,name in ipairs(allTabs) do
     local tab=button(rail,name,UDim2.fromOffset(10,51+(i-1)*44),UDim2.fromOffset(112,34))
@@ -2916,6 +3116,10 @@ local libraryHeader=make("Frame",{Size=UDim2.new(1,0,0,58),BackgroundTransparenc
 local libraryTitle=label(libraryHeader,"Feature Library",UDim2.new(),UDim2.new(1,0,0,26),20)
 local libraryCount=label(libraryHeader,"",UDim2.fromOffset(0,32),UDim2.new(1,0,0,20),11,C.Muted)
 local function searchable(text) return tostring(text):lower():gsub("[^%w]"," ") end
+local organized={AutoPlay="Generators",AutoFarmGenerators="Generators",AutoRotateGear="Generators",GeneratorESP="Generators",
+    ThreatRadius="Generators",FarmDelay="Generators",PuzzleStepDelay="Generators",InfiniteStamina="Stamina",
+    AutoBlock="Combat",BlockRange="Combat",AntiDebuff="Antis",GearESP="Items"}
+for _,row in ipairs(c.LibraryRows) do row.Category=organized[row.Key] or row.Category end
 for i,row in ipairs(c.LibraryRows) do
     local terms={row.Category,row.Key}
     local def=SUITE_LOOKUP[row.Key]
@@ -2985,8 +3189,8 @@ local function fit()
     local camera=workspace.CurrentCamera
     if not camera then return end
     local v=c.PreviewViewport or camera.ViewportSize
-    local w=math.min(860,math.max(280,v.X-24))
-    local h=math.min(720,math.max(230,v.Y-80))
+    local w=math.min(1040,math.max(280,v.X-24))
+    local h=math.min(780,math.max(230,v.Y-80))
     c.WindowWidth=w;c.WindowHeight=h
     c.Compact=v.X<700 or v.Y<550
     scale.Scale=1
@@ -3006,6 +3210,7 @@ local function fit()
         page.Position=UDim2.fromOffset(c.Compact and 0 or 132,48)
         page.Size=UDim2.new(1,c.Compact and 0 or -132,1,-48)
     end
+    if c.UI then c.UI:Layout(w,h,c.Compact) end
     local x,y=panel.AbsolutePosition.X,panel.AbsolutePosition.Y
     if not c.WindowFitted then x=(v.X-w)/2;y=(v.Y-h)/2;c.WindowFitted=true end
     panel.Position=UDim2.fromOffset(math.clamp(x,8,math.max(8,v.X-w-8)),math.clamp(y,8,math.max(8,v.Y-(minimized and 58 or h)-8)))
@@ -3075,6 +3280,18 @@ for name,factory in pairs(Factories) do
     else status(name,"Unavailable: "..tostring(adapter)); warn("Allens Forsaken "..name..": "..tostring(adapter)) end
 end
 c.Adapters={Movement=move,Combat=combat,Generators=generators,Suite=suite}
+c.UI=UIFactory({App=c,Palette=C,Gui=gui,Panel=panel,Body=body,Header=header,Rail=rail,Tabs=tabs,Pages=pages,
+    Search=searchBox,LibraryHeader=libraryHeader,Title=libraryTitle,Count=libraryCount,Badge=badge,
+    Make=make,Label=label,Button=button,Round=round,Connect=connect,Refresh=function()refreshLibrary()end})
+local plainRefresh=refreshLibrary
+refreshLibrary=function()plainRefresh();if c.UI then c.UI:Refresh()end end
+c.RefreshLibrary=refreshLibrary
+local originalSet=c.Set
+c.Set=function(self,key,value)
+    local result=originalSet(self,key,value)
+    if result and self.Ready and self.UI then refreshLibrary() end
+    return result
+end
 if type(isfile)=="function" and type(readfile)=="function" then
     pcall(function()
         if isfile(CONFIG) then
@@ -3140,5 +3357,6 @@ connect(RunService.Heartbeat,function(dt)
     end
 end)
 c.Ready=true
+fit();gui.Enabled=true
 c:Notify("Ready. All automation is paused. RightShift opens the hub.")
 print("ALLENS_FORSAKEN_READY",c.Version,"movement",move~=nil,"combat",combat~=nil,"generators",generators~=nil)
