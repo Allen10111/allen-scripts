@@ -128,6 +128,7 @@ return function(app,gameName,providedLibrary)
   app.Bind("Visible",function(v)ui:Toggle(v)end)
   app.Bind("ToggleKey",function(v)ui:SetToggleKey(Enum.KeyCode[v])end)
   app.Bind("Accent",function(v)pcall(library.SetAccent,library,Color3.fromHex(v))end)
+  section("Player & QoL","Food & Drinks"):AddStat({Name="Refill status",Get=function()return app.Food and app.Food.Snapshot().Status or "Off"end})
   local stats=section("Dashboard","Session")
   local cached,at={},0
   local function dashboard()if os.clock()-at>.5 then at=os.clock();cached=app.GetDashboard()end;return cached end
