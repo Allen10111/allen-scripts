@@ -1,10 +1,11 @@
-# Allen Scripts Hub interface
+# Allen Scripts unified interface
 
-Adapted from MoroElite by Morozhka144: https://github.com/Morozhka144/GUI2222
-Upstream revision: c4173cd6c63bd836d626583289d0785808a24287
+allen_scripts_hub.lua detects the game and opens its game entry script directly. Generic games use top-level tabs from the shared runtime. Forsaken and Hajime Rising entries now prepare their original backend source with explicit UI control metadata, then display the same MoroElite-based Allen Scripts interface via ui/dedicated_game_interface.lua. Their gameplay adapters remain unchanged.
 
-Allen Scripts Hub / Allen10111 branding uses supported title, subtitle, logo, and watermark configuration. Upstream source attribution is retained. Lucide's MIT notice remains in the bundled icon source.
+The preparation is idempotent and validates its source anchors before executing anything. Original standalone backend files remain preserved. Their game entry files provide the unified interface when launched through the universal loadstring.
 
-The library and Lucide icons are bundled into allen_scripts_hub.lua. Features reuse the existing backend and start disabled. Interface settings use AllenScriptsUI, isolated from other MoroElite menus. Unload disconnects both the interface and feature controllers. Camera right-drag is allowed while the menu is open.
+Cobalt Remote Spy's bundled code and feature entry are removed from allen_scripts_backend.lua. The Allen10111 title, watermark, silent cat/startup sounds, right-click camera movement, top-level tabs, profile/configuration actions and cleanup are retained.
 
-Verified in the connected client: full hub compilation and initialization, 63 features / 61 toggles, Perm Guard toggle changes backend state and restores its attribute, status synchronization, and desktop screenshot inspection. Physical Android/iOS checks and manual camera-right-drag verification remain pending.
+UI source: https://github.com/Morozhka144/GUI2222, upstream c4173cd6c63bd836d626583289d0785808a24287. Source attribution and Lucide MIT notice remain.
+
+Checks: both prepared game scripts compile with Luau; repeated preparation does not duplicate the interface; mocked Forsaken/Hajime controls update settings, actions execute, dropdown changes propagate, and unload clears the interface and backend. Generic Ink Game UI and dispatcher routes were previously tested. Live Forsaken/Hajime game behavior and physical Android/iOS testing remain pending.
