@@ -1999,6 +1999,62 @@ function state:GetSnapshot() return {Enabled=self.Enabled,Status=self.Status} en
 function state:Destroy() self:SetEnabled(false);self.Destroyed=true end
 return state
 ]====],
+RemoveInjuries=[====[
+-- Red Light injury relief: native injury markers only; no health/death changes.
+assert(game.GameId==7008097940,"Open Ink Game first")
+local player=game:GetService("Players").LocalPlayer
+local values=workspace:FindFirstChild("Values")
+local current=values and values:FindFirstChild("CurrentGame")
+local state={HubOnly=true,Enabled=false,Destroyed=false,Status="Off",Removed=0}
+local connections={}
+local childConnection
+local function disconnect(c) if c then c:Disconnect() end end
+local function active()
+    return state.Enabled and not state.Destroyed and current and current.Value=="RedLightGreenLight"
+end
+local function remove(marker,character)
+    if active() and player.Character==character and marker.Parent==character
+        and (marker.Name=="InjuredWalking" or marker.Name=="Crawling") then
+        marker:Destroy()
+        state.Removed+=1
+    end
+end
+local function refresh()
+    state.Status=not state.Enabled and "Off" or active() and "Red Light injury relief (local)" or "Waiting for Red Light"
+    if not active() then return end
+    local character=player.Character
+    if character then
+        for _,marker in ipairs(character:GetChildren())do remove(marker,character)end
+    end
+end
+local function bind(character)
+    disconnect(childConnection);childConnection=nil
+    if character then
+        childConnection=character.ChildAdded:Connect(function(marker)remove(marker,character)end)
+    end
+    refresh()
+end
+function state:SetEnabled(enabled)
+    enabled=enabled==true
+    if self.Destroyed or self.Enabled==enabled then return end
+    self.Enabled=enabled
+    if enabled then
+        connections[#connections+1]=player.CharacterAdded:Connect(bind)
+        if current then connections[#connections+1]=current.Changed:Connect(refresh)end
+        bind(player.Character)
+    else
+        disconnect(childConnection);childConnection=nil
+        for _,c in ipairs(connections)do c:Disconnect()end
+        table.clear(connections);self.Status="Off"
+    end
+end
+function state:GetSnapshot()return {Enabled=self.Enabled,Status=self.Status,Removed=self.Removed}end
+function state:Destroy()
+    if self.Destroyed then return end
+    self:SetEnabled(false);self.Destroyed=true
+end
+return state
+]====],
 UnlockDash=[====[
 assert(game.GameId == 7008097940, "Open Ink Game first")
 local player = game:GetService("Players").LocalPlayer
@@ -21269,6 +21325,7 @@ local features={
     {Id="perm_guard",Section="Ink Game",Category="Utility",Name="Perm Guard",Subtitle="Sets the local perm-guard flag; does not purchase the gamepass",Game=INK,Source="PermGuard"},
     {Id="unlock_dash",Section="Ink Game",Category="Movement",Name="Unlock Dash",Subtitle="Sets Faster Sprint to level 6 locally",Game=INK,Source="UnlockDash"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dash",Subtitle="v8.06 · native dash and attack prediction",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
+    {Id="inkinjuries",Section="Ink Game",Category="Movement",Name="Remove Injuries",Subtitle="Red Light only · removes local injured walking and crawling",Game=INK,Source="RemoveInjuries"},
     {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · stops on red until finish",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
     {Id="dalgonaauto",Section="Ink Game",Category="Minigames",Name="Auto-complete Dalgona",Subtitle="Triggers native cookie completion · one attempt per cookie",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_auto",Source="DalgonaAuto"},
     {Id="dalgonalighter",Section="Ink Game",Category="Minigames",Name="Dalgona Lighter",Subtitle="Temporary client-side native lighter · hold to use",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_lighter",Source="DalgonaLighter"},
@@ -21521,7 +21578,7 @@ local function matches(feature,query,onlyCurrent,universe)
 end
 local function inTab(f)
     if selectedTab=="Home" then return true end
-    if selectedTab=="Red Light" then return f.Id=="inkrlgl" end
+    if selectedTab=="Red Light" then return f.Id=="inkrlgl" or f.Id=="inkinjuries" end
     if selectedTab=="Dalgona" then return f.Id:sub(1,7)=="dalgona" end
     if selectedTab=="Glass Bridge" then return f.Id:sub(1,5)=="glass" end
     if selectedTab=="Hide & Seek" then return f.Id:sub(1,4)=="hns_" or f.Id=="inkqte" end
