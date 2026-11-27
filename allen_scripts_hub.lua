@@ -1974,6 +1974,31 @@ end
 return S
 
 ]====],
+PermGuard=[====[
+assert(game.GameId == 7008097940, "Open Ink Game first")
+local player = game:GetService("Players").LocalPlayer
+local state = {HubOnly=true,Enabled=false,Destroyed=false,Status="Off"}
+local previous
+function state:SetEnabled(enabled)
+    enabled=enabled==true
+    if self.Destroyed or self.Enabled==enabled then return end
+    if enabled then
+        previous=player:GetAttribute("__OwnsPermGuard")
+        player:SetAttribute("__OwnsPermGuard",true)
+        self.Status="Perm Guard flag enabled (local)"
+    else
+        if player:GetAttribute("__OwnsPermGuard")==true then
+            player:SetAttribute("__OwnsPermGuard",previous)
+        end
+        previous=nil
+        self.Status="Off"
+    end
+    self.Enabled=enabled
+end
+function state:GetSnapshot() return {Enabled=self.Enabled,Status=self.Status} end
+function state:Destroy() self:SetEnabled(false);self.Destroyed=true end
+return state
+]====],
 UnlockDash=[====[
 assert(game.GameId == 7008097940, "Open Ink Game first")
 local player = game:GetService("Players").LocalPlayer
@@ -1990,14 +2015,14 @@ function state:SetEnabled(enabled)
             self.Status = "Faster Sprint unavailable"
             return
         end
-        if sprint.Value < 5 then
+        if sprint.Value < 6 then
             previousLevel = sprint.Value
-            sprint.Value = 5
+            sprint.Value = 6
             changedBoost = sprint
         end
         self.Status = "Faster Sprint " .. tostring(sprint.Value) .. " (local)"
     else
-        if changedBoost and changedBoost.Parent and changedBoost.Value == 5 then
+        if changedBoost and changedBoost.Parent and changedBoost.Value == 6 then
             changedBoost.Value = previousLevel
         end
         changedBoost, previousLevel = nil, nil
@@ -21241,7 +21266,8 @@ local features={
     {Id="fnp",Section="Friday Night Partying",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, sustains and chords · skips harmful notes",Badge="Friday Night Partying",Game=FNP,Key="__FNP_AUTOPLAY",Source="FNP"},
     {Id="bfnf",Section="Basically FNF: Remix",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · local lanes",Badge="Basically FNF: Remix",Game=BFNF,Key="__BFNF_AUTOPLAY",Source="BFNF"},
     {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
-    {Id="unlock_dash",Section="Ink Game",Category="Movement",Name="Unlock Dash",Subtitle="Sets Faster Sprint to level 5 locally",Game=INK,Source="UnlockDash"},
+    {Id="perm_guard",Section="Ink Game",Category="Utility",Name="Perm Guard",Subtitle="Sets the local perm-guard flag; does not purchase the gamepass",Game=INK,Source="PermGuard"},
+    {Id="unlock_dash",Section="Ink Game",Category="Movement",Name="Unlock Dash",Subtitle="Sets Faster Sprint to level 6 locally",Game=INK,Source="UnlockDash"},
     {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dash",Subtitle="v8.06 · native dash and attack prediction",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · stops on red until finish",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
     {Id="dalgonaauto",Section="Ink Game",Category="Minigames",Name="Auto-complete Dalgona",Subtitle="Triggers native cookie completion · one attempt per cookie",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_auto",Source="DalgonaAuto"},
