@@ -32,10 +32,10 @@ end
 local Library = {
     Version = "2.0.0",
     Folder = "AllenScriptsUI",
-    SoundNames = { "Nya", "Soft", "Payment", "Tuntun", "Voiced", "Litvin", "Vibe", "Loader", "Warn", "Error" },
+    SoundNames = { "Soft", "Payment", "Tuntun", "Voiced", "Litvin", "Vibe", "Warn", "Error" },
     SoundFiles = {
-        Nya = "nya.mp3", Soft = "soft.mp3", Payment = "payment.mp3", Tuntun = "tuntun.mp3", Voiced = "voiced.mp3", Litvin = "Litvin.mp3",
-        Vibe = "vibe.mp3", Loader = "Loader.mp3", Warn = "Warn.mp3", Error = "Error.mp3",
+        Soft = "soft.mp3", Payment = "payment.mp3", Tuntun = "tuntun.mp3", Voiced = "voiced.mp3", Litvin = "Litvin.mp3",
+        Vibe = "vibe.mp3", Warn = "Warn.mp3", Error = "Error.mp3",
     },
     -- character art: PNGs in the repo's Art/ folder, kept in sync with MoroLumina/Art (like the sounds). This list
     -- sets the order and names; other pictures in Art/ are added after it. These are trimmed to the figure and
@@ -2187,6 +2187,7 @@ end
 local SOUND_GAIN = 2
 
 function Library:PlaySound(name, volume)
+    if name=="Nya" or name=="Loader" then return end -- removed cat/startup audio, including saved settings
     local win = self.Window
     task.spawn(function()
         local id = self:_SoundAsset(name)
@@ -4527,7 +4528,7 @@ function Library:CreateWindow(cfg)
     FONT = fontFamily(prefs["Font"] or cfg.Font or "") or DEFAULT_FONT
     win.LoaderSound = cfg.LoaderSound ~= false
     if type(prefs["Startup Sound (Loader)"]) == "boolean" then win.LoaderSound = prefs["Startup Sound (Loader)"] end
-    win.NotifySoundName = cfg.NotifySoundName or "Nya"
+    win.NotifySoundName = cfg.NotifySoundName or "Soft"
     win.NotifySoundVolume = cfg.NotifySoundVolume or 0.5
     win.BlurEnabled = cfg.Blur ~= false
     win.BarWidth = BAR_W
