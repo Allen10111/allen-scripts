@@ -1,4 +1,4 @@
--- Ink Game uncertainty-aware intent-ensemble auto dodge v8.05 (hub)
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.06 (hub)
 -- The Allen Scripts hub controls this engine. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
@@ -98,7 +98,7 @@ local ZERO = Vector3.zero
 local DIRECTION_SAMPLE_TIMES = { 0.04, 0.08, 0.14, 0.22, 0.34, 0.5 }
 
 local State = {
-    Version = 8.05,
+    Version = 8.06,
     MinimumActionPlanningBudget = 0.0018,
     PlanningReserveUses = 0,
     LocalRestCorrections = 0,
@@ -1044,18 +1044,12 @@ local function nativeDashAvailable(character, humanoid)
         return false, "Glass Bridge dash disabled", 0, 0, 0, "Native"
     end
 
-    local boosts = LocalPlayer:FindFirstChild("Boosts")
-    local fasterSprint = boosts and boosts:FindFirstChild("Faster Sprint")
+    -- Sprint level controls charging in PreDash, not permission to Roll.
+    -- The native release handler owns cooldown, stun and event restrictions.
     local phantomStep = State:IsPhantomStepActive(character)
-    local unlocked = fasterSprint and fasterSprint.Value >= 5
-        or workspace:GetAttribute("MaxSpeedBoosts")
-        or phantomStep
-    if not unlocked then
-        return false, "Dash not unlocked", 0, 0, 0, "Native"
-    end
 
     local nativeController = State:ResolveDashControllerState(character)
-    if nativeController and (nativeController.DidEffect or nativeController.DashZoomIn) then
+    if nativeController and (nativeController.DashZoomIn) then
         return false, "Manual dash charge active", 0, 0, 0, "Controller"
     end
     if phantomStep then
@@ -3209,7 +3203,7 @@ end
 function State:NativeNormalCooldown(character, now)
     local controller = self:ResolveDashControllerState(character)
     if controller then
-        if controller.DidEffect or controller.DashZoomIn then
+        if controller.DashZoomIn then
             return false, "Manual dash charge active", 0, "Controller"
         end
         if controller.DashCD then return false, "Native DashCD", 0, "Controller" end
@@ -10767,6 +10761,9 @@ end
 function State:ReleaseNativeDash(info, humanoid, direction)
     humanoid:Move(direction, false)
     local releaseAt = os.clock()
+    -- Match the mobile button press/release pair, without a deliberate hold.
+    -- PreDash clears stale DashAutoReleased/DidEffect from charged dashes.
+    info:Fire({ Dashing = true })
     info:Fire({ DashingReleased = true })
     return releaseAt
 end

@@ -2018,7 +2018,7 @@ end
 return state
 ]====],
 Dodge=[====[
--- Ink Game uncertainty-aware intent-ensemble auto dodge v8.05 (hub)
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.06 (hub)
 -- The Allen Scripts hub controls this engine. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
 -- Native dash event only; no synthetic keyboard input or intentional reaction wait.
@@ -2118,7 +2118,7 @@ local ZERO = Vector3.zero
 local DIRECTION_SAMPLE_TIMES = { 0.04, 0.08, 0.14, 0.22, 0.34, 0.5 }
 
 local State = {
-    Version = 8.05,
+    Version = 8.06,
     MinimumActionPlanningBudget = 0.0018,
     PlanningReserveUses = 0,
     LocalRestCorrections = 0,
@@ -3064,18 +3064,12 @@ local function nativeDashAvailable(character, humanoid)
         return false, "Glass Bridge dash disabled", 0, 0, 0, "Native"
     end
 
-    local boosts = LocalPlayer:FindFirstChild("Boosts")
-    local fasterSprint = boosts and boosts:FindFirstChild("Faster Sprint")
+    -- Sprint level controls charging in PreDash, not permission to Roll.
+    -- The native release handler owns cooldown, stun and event restrictions.
     local phantomStep = State:IsPhantomStepActive(character)
-    local unlocked = fasterSprint and fasterSprint.Value >= 5
-        or workspace:GetAttribute("MaxSpeedBoosts")
-        or phantomStep
-    if not unlocked then
-        return false, "Dash not unlocked", 0, 0, 0, "Native"
-    end
 
     local nativeController = State:ResolveDashControllerState(character)
-    if nativeController and (nativeController.DidEffect or nativeController.DashZoomIn) then
+    if nativeController and (nativeController.DashZoomIn) then
         return false, "Manual dash charge active", 0, 0, 0, "Controller"
     end
     if phantomStep then
@@ -5229,7 +5223,7 @@ end
 function State:NativeNormalCooldown(character, now)
     local controller = self:ResolveDashControllerState(character)
     if controller then
-        if controller.DidEffect or controller.DashZoomIn then
+        if controller.DashZoomIn then
             return false, "Manual dash charge active", 0, "Controller"
         end
         if controller.DashCD then return false, "Native DashCD", 0, "Controller" end
@@ -12787,6 +12781,9 @@ end
 function State:ReleaseNativeDash(info, humanoid, direction)
     humanoid:Move(direction, false)
     local releaseAt = os.clock()
+    -- Match the mobile button press/release pair, without a deliberate hold.
+    -- PreDash clears stale DashAutoReleased/DidEffect from charged dashes.
+    info:Fire({ Dashing = true })
     info:Fire({ DashingReleased = true })
     return releaseAt
 end
@@ -21245,7 +21242,7 @@ local features={
     {Id="bfnf",Section="Basically FNF: Remix",Category="Rhythm",Name="Auto Play",Subtitle="Native taps, holds and chords · local lanes",Badge="Basically FNF: Remix",Game=BFNF,Key="__BFNF_AUTOPLAY",Source="BFNF"},
     {Id="shindo",Section="Shindo Life",Category="Movement",Name="Auto Dodge + Auto Block",Subtitle="Native movement · automatic power guard",Badge="Shindo Life",Game=SHINDO,Key="__SHINDO_AUTO_DODGE",Source="Shindo"},
     {Id="unlock_dash",Section="Ink Game",Category="Movement",Name="Unlock Dash",Subtitle="Sets Faster Sprint to level 5 locally",Game=INK,Source="UnlockDash"},
-    {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dash",Subtitle="v8.05 · native dash and attack prediction",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
+    {Id="dodge",Section="Ink Game",Category="Movement",Name="Weapon Auto Dash",Subtitle="v8.06 · native dash and attack prediction",Game=INK,Key="__INK_GAME_AUTO_DODGE",Source="Dodge"},
     {Id="inkrlgl",Section="Ink Game",Category="Movement",Name="Red Light, Green Light Auto Stop",Subtitle="Manual movement · stops on red until finish",Badge="Ink Game",Game=INK,Key="__ALLEN_INK_RLGL",Source="RLGL"},
     {Id="dalgonaauto",Section="Ink Game",Category="Minigames",Name="Auto-complete Dalgona",Subtitle="Triggers native cookie completion · one attempt per cookie",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_auto",Source="DalgonaAuto"},
     {Id="dalgonalighter",Section="Ink Game",Category="Minigames",Name="Dalgona Lighter",Subtitle="Temporary client-side native lighter · hold to use",Badge="Ink Game",Game=INK,Key="__ALLEN_DALGONA_lighter",Source="DalgonaLighter"},
