@@ -2008,6 +2008,7 @@ local current=values and values:FindFirstChild("CurrentGame")
 local state={HubOnly=true,Enabled=false,Destroyed=false,Status="Off",Removed=0}
 local connections={}
 local childConnection
+local generation=0
 local function disconnect(c) if c then c:Disconnect() end end
 local function active()
     return state.Enabled and not state.Destroyed and current and current.Value=="RedLightGreenLight"
@@ -2038,10 +2039,18 @@ function state:SetEnabled(enabled)
     enabled=enabled==true
     if self.Destroyed or self.Enabled==enabled then return end
     self.Enabled=enabled
+    generation+=1
     if enabled then
         connections[#connections+1]=player.CharacterAdded:Connect(bind)
         if current then connections[#connections+1]=current.Changed:Connect(refresh)end
         bind(player.Character)
+        local token=generation
+        task.spawn(function()
+            while state.Enabled and not state.Destroyed and generation==token do
+                task.wait(.15)
+                if state.Enabled and not state.Destroyed and generation==token then refresh()end
+            end
+        end)
     else
         disconnect(childConnection);childConnection=nil
         for _,c in ipairs(connections)do c:Disconnect()end
