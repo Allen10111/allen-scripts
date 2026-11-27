@@ -1,6 +1,23 @@
 
 -- Allen Scripts presentation adapter for MoroElite (GUI2222).
 do
+    -- Games with their own interface launch directly without a hub menu.
+    local dedicated
+    for _,feature in ipairs(features)do
+        if feature.Action and feature.Game==game.GameId then dedicated=feature;break end
+    end
+    if dedicated then
+        gui.Enabled=false;window.Visible=false
+        change(dedicated)
+        hub.AutoDetectedGame=dedicated.Section
+        task.spawn(function()
+            while not hub.Destroyed and hub.Busy[dedicated.Id]do task.wait(.1)end
+            if not hub.Destroyed and not snapshot(dedicated).Enabled then
+                warn("[Allen Scripts] "..tostring(note))
+            end
+        end)
+        return hub
+    end
     local libraryFactory, libraryError=loadstring(SOURCES.AllenInterface,"AllenScripts/MoroElite")
     assert(libraryFactory,libraryError)
     local library=libraryFactory()
@@ -9,7 +26,7 @@ do
     local ui=library:CreateWindow({
         Title="Allen Scripts Hub",Subtitle="Allen10111 · "..gameName,
         Logo=false,Art=false,MenuArt=false,OpenControl="Button",
-        ToggleKey=Enum.KeyCode.RightShift,TopButtons={},
+        ToggleKey=Enum.KeyCode.RightShift,TopButtons={"bell","settings"},
         LoaderSound=false,NotifySound=false,Blur=false,
         TeleportUrl="https://raw.githubusercontent.com/Allen10111/allen-scripts/main/allen_scripts_hub.lua",
         ExecuteOnTeleport=false,
@@ -45,6 +62,10 @@ do
         Utility="wrench",Rhythm="music",Aim="crosshair",Forsaken="library",
         ["Hajime Rising"]="flame"}
     local function group(feature)
+        if feature.Id:find("^hns_")then return "Hide & Seek" end
+        if feature.Id=="inkrope" or feature.Id:find("^rope_")then return "Jump Rope" end
+        if feature.Id=="inktug"then return "Tug of War" end
+        if feature.Id=="inkqte"then return "Auto QTE" end
         if feature.Id=="inkrlgl" or feature.Id=="inkinjuries" then return "Red Light" end
         if feature.Id:find("^dalgona")then return "Dalgona" end
         if feature.Id:find("^glass")then return "Glass Bridge" end
@@ -63,16 +84,18 @@ do
         end
         change(feature)
     end
-    local settingsReady=false
-    local function buildGame(name)
-        if tabs[name] then ui:SelectTab(tabs[name]);return end
-        local tab=ui:CreateTab({Name=name,Icon=name=="Universal" and "globe" or "gamepad-2"})
-        tabs[name]=tab
+    local supported=false
+    for _,feature in ipairs(features)do
+        if feature.Section==gameName and not feature.Action then supported=true;break end
+    end
+    hub.AutoDetectedGame=supported and gameName or nil
+    if supported then
         local groups={}
-        for _,feature in ipairs(features)do if feature.Section==name then
-            local key=group(feature)
+        for _,feature in ipairs(features)do if feature.Section==gameName or feature.Section=="Universal" then
+            local key=feature.Section=="Universal" and "Utility" or group(feature)
             if not groups[key] then
-                local page=tab:SubTab({Name=key,Icon=icons[key] or "layout-grid"})
+                local page=ui:CreateTab({Name=key,Icon=icons[key] or "layout-grid"})
+                tabs[key]=page
                 page.RightCol.Frame.Visible=false
                 page.LeftCol.Frame.Size=UDim2.new(1,0,0,0)
                 groups[key]=page:Column("left"):CreateSection({Name=key,Icon=icons[key] or "sliders-horizontal"})
@@ -93,9 +116,15 @@ do
                     Callback=function(v)env.__ALLEN_SILENT_AIM_RADIUS=v end})
             end
         end end
-        sections[name]=groups
-        if not settingsReady then settingsReady=true;ui:AddSettingsTab()end
-        ui:SelectTab(tab)
+
+        sections[gameName]=groups
+        ui:AddSettingsTab()
+    else
+        local tab=ui:CreateTab({Name="Unsupported Game",Icon="info"})
+        tabs.Unsupported=tab
+        tab.RightCol.Frame.Visible=false;tab.LeftCol.Frame.Size=UDim2.new(1,0,0,0)
+        local message=tab:Column("left"):CreateSection({Name="Allen Scripts Hub"})
+        message:AddLabel("This game is not supported yet.")
     end
     local profile=ui:GetProfileTab():Column("right"):CreateSection({Name="Allen Scripts",Icon="sparkles"})
     profile:AddLabel("Allen Scripts Hub · Allen10111")
@@ -104,53 +133,14 @@ do
     profile:AddStat({Name="Hub status",Get=function()return note~="" and note or "Ready"end})
     profile:AddButton({Name="Unload Allen Scripts Hub",NoConfig=true,Callback=function()hub:Destroy()end})
     library.Folder="AllenScriptsUI"
-    local loader=ui:CreateTab({Name="Loader",Icon="download"})
-    loader.RightCol.Frame.Visible=false
-    loader.LeftCol.Frame.Size=UDim2.new(1,0,0,0)
-    local section=loader:Column("left"):CreateSection({Name="Allen Scripts",Icon="gamepad-2"})
-    local selected=seen[gameName] and gameName or "Universal"
-    local selector=section:AddDropdown({Name="Game",Options=names,Default=selected,NoConfig=true,
-        Callback=function(value)selected=value end})
-    local loading=false
-    function hub:LoadSelectedScript()
-        if self.Destroyed or loading then return false end
-        local name=selected
-        local action
-        local compatible=name=="Universal"
-        for _,feature in ipairs(features)do if feature.Section==name then
-            if not feature.Game or feature.Game==game.GameId then compatible=true end
-            if feature.Action then action=feature end
-        end end
-        if not compatible then
-            ui:Notify({Title="Allen Scripts Hub",Text="Join "..name.." before loading its script.",Type="warning",Sound=false})
-            return false
-        end
-        if action then
-            loading=true
-            activate(action)
-            task.spawn(function()
-                while not hub.Destroyed and hub.Busy[action.Id] do task.wait(.1)end
-                loading=false
-                if hub.Destroyed then return end
-                if snapshot(action).Enabled then ui:Toggle(false)
-                else ui:Notify({Title=action.Name,Text=note~="" and note or "Script did not finish loading. Try again.",Type="error",Sound=false})end
-            end)
-        else
-            buildGame(name)
-        end
-        return true
-    end
-    section:AddButton({Name="Load Script",Icon="play",Primary=true,NoConfig=true,NoFastMenu=true,
-        Callback=function()hub:LoadSelectedScript()end})
-    hub.LoaderTab=loader;hub.GameSelector=selector
     ui.Watermark.Visible=true
-    ui:SelectTab(loader)
     hub.InterfaceControls=controls
-    hub.SelectGame=function(_,name)if seen[name]then selected=name;selector:Set(name);ui:SelectTab(loader)end end
-    hub.SelectTab=function(_,name)
-        local tab=tabs[selected]
-        if tab and tab:GetSubTab(name) then tab:SelectSub(tab:GetSubTab(name))end
-    end
+    hub.GameTabs=tabs
+    hub.SelectGame=function()return false end
+    hub.SelectTab=function(_,name)if tabs[name]then ui:SelectTab(tabs[name])end end
+    local first=tabs.Combat or tabs.Movement or tabs["Red Light"]
+    if not first then for _,tab in pairs(tabs)do first=tab;break end end
+    if first then ui:SelectTab(first)end
     task.spawn(function()
         while not hub.Destroyed do
             for _,entry in ipairs(controls)do
